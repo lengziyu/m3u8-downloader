@@ -112,8 +112,14 @@ def header_args(
 
 def hls_input_args() -> list[str]:
     return [
+        "-protocol_whitelist",
+        "file,http,https,tcp,tls,crypto,data",
         "-allowed_extensions",
         "ALL",
+        "-allowed_segment_extensions",
+        "ALL",
+        "-extension_picky",
+        "0",
         "-reconnect",
         "1",
         "-reconnect_streamed",
