@@ -45,8 +45,22 @@ def build_output_name(index: int, url: str, custom_name: str | None) -> str:
         base = sanitize_filename(custom_name)
     else:
         parsed = urlparse(url)
-        raw_name = Path(unquote(parsed.path)).stem
-        base = sanitize_filename(raw_name) if raw_name else f"video_{index:03d}"
+        path_parts = [unquote(p) for p in parsed.path.split("/") if p]
+        quality = sanitize_filename(path_parts[-2]) if len(path_parts) >= 2 else ""
+        source_id = sanitize_filename(path_parts[-3]) if len(path_parts) >= 3 else ""
+        fragment = sanitize_filename(unquote(parsed.fragment)) if parsed.fragment else ""
+
+        if fragment and quality:
+            base = f"{fragment}_{quality}"
+        elif fragment:
+            base = fragment
+        elif source_id and quality:
+            base = f"{source_id}_{quality}"
+        elif source_id:
+            base = source_id
+        else:
+            raw_name = Path(unquote(parsed.path)).stem
+            base = sanitize_filename(raw_name) if raw_name else f"video_{index:03d}"
     if not base.lower().endswith(".mp4"):
         return f"{base}.mp4"
     return base

@@ -19,13 +19,15 @@ from urllib.parse import unquote, urlparse
 from PySide6.QtCore import (
     QEasingCurve,
     QObject,
+    QParallelAnimationGroup,
     QPropertyAnimation,
+    QRectF,
     Qt,
     QThread,
     Signal,
     Slot,
 )
-from PySide6.QtGui import QColor, QBrush
+from PySide6.QtGui import QBrush, QColor, QFont, QIcon, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -52,6 +54,7 @@ DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
 )
+APP_DISPLAY_NAME = "M3U8-Downloader"
 
 
 @dataclass(frozen=True)
@@ -100,11 +103,62 @@ def build_output_name(index: int, url: str, custom_name: str | None) -> str:
         base = sanitize_filename(custom_name)
     else:
         parsed = urlparse(url)
-        stem = Path(unquote(parsed.path)).stem
-        base = sanitize_filename(stem) if stem else f"video_{index:03d}"
+        path_parts = [unquote(p) for p in parsed.path.split("/") if p]
+        quality = sanitize_filename(path_parts[-2]) if len(path_parts) >= 2 else ""
+        source_id = sanitize_filename(path_parts[-3]) if len(path_parts) >= 3 else ""
+        fragment = sanitize_filename(unquote(parsed.fragment)) if parsed.fragment else ""
+
+        if fragment and quality:
+            base = f"{fragment}_{quality}"
+        elif fragment:
+            base = fragment
+        elif source_id and quality:
+            base = f"{source_id}_{quality}"
+        elif source_id:
+            base = source_id
+        else:
+            stem = Path(unquote(parsed.path)).stem
+            base = sanitize_filename(stem) if stem else f"video_{index:03d}"
     if base.lower().endswith(".mp4"):
         return base
     return f"{base}.mp4"
+
+
+def create_app_icon(size: int = 256) -> QIcon:
+    pix = QPixmap(size, size)
+    pix.fill(Qt.transparent)
+    painter = QPainter(pix)
+    painter.setRenderHint(QPainter.Antialiasing)
+
+    grad = QLinearGradient(0, 0, size, size)
+    grad.setColorAt(0.0, QColor("#7B43FF"))
+    grad.setColorAt(1.0, QColor("#B37BFF"))
+    card = QPainterPath()
+    card.addRoundedRect(QRectF(6, 6, size - 12, size - 12), 54, 54)
+    painter.fillPath(card, grad)
+
+    painter.setPen(Qt.NoPen)
+    painter.setBrush(QColor("#FFFFFF"))
+    shaft_w = size * 0.12
+    shaft_h = size * 0.28
+    shaft_x = (size - shaft_w) / 2
+    shaft_y = size * 0.28
+    painter.drawRoundedRect(QRectF(shaft_x, shaft_y, shaft_w, shaft_h), 12, 12)
+
+    arrow = QPainterPath()
+    arrow.moveTo(size * 0.33, size * 0.51)
+    arrow.lineTo(size * 0.5, size * 0.72)
+    arrow.lineTo(size * 0.67, size * 0.51)
+    arrow.closeSubpath()
+    painter.fillPath(arrow, QColor("#FFFFFF"))
+
+    painter.setPen(QPen(QColor("#FFFFFF"), max(5, size // 30)))
+    painter.drawLine(int(size * 0.22), int(size * 0.80), int(size * 0.78), int(size * 0.80))
+
+    painter.setFont(QFont("Arial", max(16, size // 8), QFont.Bold))
+    painter.drawText(QRectF(0, size * 0.06, size, size * 0.18), Qt.AlignCenter, "M3U8")
+    painter.end()
+    return QIcon(pix)
 
 
 def build_tasks(entries: list[tuple[str | None, str]], output_dir: Path) -> list[DownloadTask]:
@@ -492,10 +546,13 @@ class BatchWorker(QObject):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("M3U8 Batch Downloader")
+        self.setWindowTitle(APP_DISPLAY_NAME)
         self.resize(1240, 830)
+        self.setWindowIcon(create_app_icon())
 
         self.current_theme = "purple"
+        self.settings_panel_expanded = True
+        self.settings_anim: QParallelAnimationGroup | None = None
         self.worker_thread: QThread | None = None
         self.worker: BatchWorker | None = None
         self.row_by_index: dict[int, int] = {}
@@ -509,24 +566,121 @@ class MainWindow(QMainWindow):
         root = QWidget(self)
         root.setObjectName("root")
         self.setCentralWidget(root)
-        outer = QVBoxLayout(root)
-        outer.setContentsMargins(22, 20, 22, 20)
-        outer.setSpacing(14)
+        shell = QHBoxLayout(root)
+        shell.setContentsMargins(22, 20, 22, 20)
+        shell.setSpacing(14)
+
+        self.settings_panel = QFrame()
+        self.settings_panel.setObjectName("settingsPanel")
+        self.settings_panel.setMinimumWidth(280)
+        self.settings_panel.setMaximumWidth(280)
+        settings_layout = QVBoxLayout(self.settings_panel)
+        settings_layout.setContentsMargins(10, 12, 10, 12)
+        settings_layout.setSpacing(10)
+
+        self.settings_toggle_btn = QPushButton("⚙ 设置")
+        self.settings_toggle_btn.setObjectName("settingsToggleBtn")
+        self.settings_toggle_btn.setMinimumHeight(40)
+        self.settings_toggle_btn.clicked.connect(self._toggle_settings_panel)
+        settings_layout.addWidget(self.settings_toggle_btn)
+
+        self.settings_content = QWidget()
+        self.settings_content.setObjectName("settingsContent")
+        settings_content_layout = QVBoxLayout(self.settings_content)
+        settings_content_layout.setContentsMargins(6, 4, 6, 4)
+        settings_content_layout.setSpacing(12)
+
+        settings_title = QLabel("下载设置")
+        settings_title.setObjectName("sectionTitle")
+        settings_content_layout.addWidget(settings_title)
+
+        output_label = QLabel("下载目录")
+        output_label.setObjectName("fieldLabel")
+        self.output_dir_input = QLineEdit(str((Path.cwd() / "downloads").resolve()))
+        self.output_dir_input.setObjectName("pathInput")
+        browse_btn = QPushButton("选择目录")
+        browse_btn.setObjectName("secondaryBtn")
+        browse_btn.clicked.connect(self._choose_output_dir)
+
+        settings_content_layout.addWidget(output_label)
+        settings_content_layout.addWidget(self.output_dir_input)
+        settings_content_layout.addWidget(browse_btn)
+
+        jobs_label = QLabel("并发")
+        jobs_label.setObjectName("fieldLabel")
+        self.jobs_input = QSpinBox()
+        self.jobs_input.setRange(10, 200)
+        self.jobs_input.setSingleStep(10)
+        self.jobs_input.setValue(20)
+        self.jobs_input.setObjectName("spinBox")
+        self.jobs_input.setButtonSymbols(QSpinBox.NoButtons)
+        self.jobs_input.setAlignment(Qt.AlignCenter)
+
+        self.jobs_minus_btn = QPushButton("−")
+        self.jobs_minus_btn.setObjectName("stepBtn")
+        self.jobs_minus_btn.setFixedSize(34, 34)
+        self.jobs_minus_btn.clicked.connect(
+            lambda: self.jobs_input.setValue(
+                max(self.jobs_input.minimum(), self.jobs_input.value() - 10)
+            )
+        )
+
+        self.jobs_plus_btn = QPushButton("+")
+        self.jobs_plus_btn.setObjectName("stepBtn")
+        self.jobs_plus_btn.setFixedSize(34, 34)
+        self.jobs_plus_btn.clicked.connect(
+            lambda: self.jobs_input.setValue(
+                min(self.jobs_input.maximum(), self.jobs_input.value() + 10)
+            )
+        )
+
+        jobs_row = QHBoxLayout()
+        jobs_row.setSpacing(8)
+        jobs_row.addWidget(self.jobs_minus_btn)
+        jobs_row.addWidget(self.jobs_input, 1)
+        jobs_row.addWidget(self.jobs_plus_btn)
+
+        retries_label = QLabel("重试")
+        retries_label.setObjectName("fieldLabel")
+        self.retries_input = QSpinBox()
+        self.retries_input.setRange(0, 10)
+        self.retries_input.setValue(2)
+        self.retries_input.setObjectName("spinBox")
+        self.retries_input.setAlignment(Qt.AlignCenter)
+
+        settings_content_layout.addWidget(jobs_label)
+        settings_content_layout.addLayout(jobs_row)
+        settings_content_layout.addWidget(retries_label)
+        settings_content_layout.addWidget(self.retries_input)
+        settings_content_layout.addStretch(1)
+        settings_layout.addWidget(self.settings_content, 1)
+
+        right = QWidget()
+        right_layout = QVBoxLayout(right)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(14)
 
         header = QFrame()
         header.setObjectName("headerCard")
-        header_layout = QVBoxLayout(header)
-        header_layout.setContentsMargins(24, 18, 24, 18)
-        header_layout.setSpacing(6)
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(24, 16, 24, 16)
+        header_layout.setSpacing(12)
 
-        title = QLabel("M3U8 批量下载器")
+        title = QLabel(APP_DISPLAY_NAME)
         title.setObjectName("titleLabel")
         subtitle = QLabel("支持 Windows 10/11、macOS；批量下载为 MP4；失败任务自动导出")
         subtitle.setObjectName("subtitleLabel")
-        header_layout.addWidget(title)
-        header_layout.addWidget(subtitle)
+        self.theme_btn = QPushButton("◐")
+        self.theme_btn.setObjectName("themeIconBtn")
+        self.theme_btn.setFixedSize(38, 38)
+        self.theme_btn.clicked.connect(self._toggle_theme)
 
-        outer.addWidget(header)
+        header_layout.addWidget(title, 0, Qt.AlignVCenter)
+        header_layout.addWidget(subtitle, 0, Qt.AlignVCenter)
+        header_layout.addStretch(1)
+        header_layout.addWidget(self.theme_btn, 0, Qt.AlignRight | Qt.AlignVCenter)
+
+        right_layout.addWidget(header)
 
         input_card = QFrame()
         input_card.setObjectName("card")
@@ -549,60 +703,7 @@ class MainWindow(QMainWindow):
 
         input_layout.addWidget(input_title)
         input_layout.addWidget(self.url_input)
-        outer.addWidget(input_card)
-
-        controls = QFrame()
-        controls.setObjectName("card")
-        controls_layout = QVBoxLayout(controls)
-        controls_layout.setContentsMargins(20, 16, 20, 16)
-        controls_layout.setSpacing(12)
-
-        row1 = QHBoxLayout()
-        row1.setSpacing(10)
-        output_label = QLabel("下载目录")
-        output_label.setObjectName("fieldLabel")
-        self.output_dir_input = QLineEdit(str((Path.cwd() / "downloads").resolve()))
-        self.output_dir_input.setObjectName("pathInput")
-        browse_btn = QPushButton("选择目录")
-        browse_btn.setObjectName("secondaryBtn")
-        browse_btn.clicked.connect(self._choose_output_dir)
-
-        row1.addWidget(output_label)
-        row1.addWidget(self.output_dir_input, 1)
-        row1.addWidget(browse_btn)
-
-        row2 = QHBoxLayout()
-        row2.setSpacing(10)
-
-        jobs_label = QLabel("并发")
-        jobs_label.setObjectName("fieldLabel")
-        self.jobs_input = QSpinBox()
-        self.jobs_input.setRange(1, 16)
-        self.jobs_input.setValue(max(1, min(4, os.cpu_count() or 4)))
-        self.jobs_input.setObjectName("spinBox")
-
-        retries_label = QLabel("重试")
-        retries_label.setObjectName("fieldLabel")
-        self.retries_input = QSpinBox()
-        self.retries_input.setRange(0, 10)
-        self.retries_input.setValue(2)
-        self.retries_input.setObjectName("spinBox")
-
-        self.theme_btn = QPushButton("切换到白色主题")
-        self.theme_btn.setObjectName("secondaryBtn")
-        self.theme_btn.clicked.connect(self._toggle_theme)
-
-        row2.addWidget(jobs_label)
-        row2.addWidget(self.jobs_input)
-        row2.addSpacing(8)
-        row2.addWidget(retries_label)
-        row2.addWidget(self.retries_input)
-        row2.addStretch(1)
-        row2.addWidget(self.theme_btn)
-
-        controls_layout.addLayout(row1)
-        controls_layout.addLayout(row2)
-        outer.addWidget(controls)
+        right_layout.addWidget(input_card)
 
         action_row = QHBoxLayout()
         action_row.setSpacing(10)
@@ -617,10 +718,11 @@ class MainWindow(QMainWindow):
 
         action_row.addWidget(self.start_btn, 0)
         action_row.addWidget(self.summary_label, 1)
-        outer.addLayout(action_row)
+        right_layout.addLayout(action_row)
 
         table_card = QFrame()
         table_card.setObjectName("card")
+        table_card.setMinimumHeight(440)
         table_layout = QVBoxLayout(table_card)
         table_layout.setContentsMargins(16, 12, 16, 14)
         table_layout.setSpacing(10)
@@ -645,7 +747,11 @@ class MainWindow(QMainWindow):
 
         table_layout.addWidget(table_title)
         table_layout.addWidget(self.table)
-        outer.addWidget(table_card, 1)
+        right_layout.addWidget(table_card, 1)
+
+        shell.addWidget(self.settings_panel, 0)
+        shell.addWidget(right, 1)
+        self._set_settings_panel_expanded(True, animate=False)
 
     def _animate_window_enter(self) -> None:
         self.setWindowOpacity(0.0)
@@ -665,6 +771,41 @@ class MainWindow(QMainWindow):
         anim.setEasingCurve(QEasingCurve.OutCubic)
         anim.start(QPropertyAnimation.DeleteWhenStopped)
 
+    def _toggle_settings_panel(self) -> None:
+        self._set_settings_panel_expanded(not self.settings_panel_expanded, animate=True)
+
+    def _set_settings_panel_expanded(self, expanded: bool, animate: bool) -> None:
+        self.settings_panel_expanded = expanded
+        target = 280 if expanded else 64
+        current = self.settings_panel.maximumWidth()
+
+        if self.settings_anim:
+            self.settings_anim.stop()
+            self.settings_anim = None
+
+        if animate:
+            group = QParallelAnimationGroup(self)
+            for prop in (b"minimumWidth", b"maximumWidth"):
+                anim = QPropertyAnimation(self.settings_panel, prop, group)
+                anim.setStartValue(current)
+                anim.setEndValue(target)
+                anim.setDuration(220)
+                anim.setEasingCurve(QEasingCurve.OutCubic)
+                group.addAnimation(anim)
+            group.start(QPropertyAnimation.DeleteWhenStopped)
+            self.settings_anim = group
+        else:
+            self.settings_panel.setMinimumWidth(target)
+            self.settings_panel.setMaximumWidth(target)
+
+        self.settings_content.setVisible(expanded)
+        self.settings_toggle_btn.setText("⚙ 设置" if expanded else "⚙")
+        self.settings_toggle_btn.setToolTip("收起设置" if expanded else "展开设置")
+        if expanded:
+            self.settings_toggle_btn.setStyleSheet("")
+        else:
+            self.settings_toggle_btn.setStyleSheet("padding: 0px; text-align: center;")
+
     def _apply_theme(self, theme: str) -> None:
         if theme == "purple":
             stylesheet = """
@@ -677,6 +818,24 @@ class MainWindow(QMainWindow):
                     background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
                         stop:0 #7B43FF, stop:1 #A66BFF);
                 }
+                QFrame#settingsPanel {
+                    border-radius: 16px;
+                    background: rgba(255, 255, 255, 0.08);
+                    border: 1px solid rgba(255, 255, 255, 0.16);
+                }
+                QPushButton#settingsToggleBtn {
+                    border-radius: 11px;
+                    border: 1px solid rgba(255, 255, 255, 0.28);
+                    background: rgba(255, 255, 255, 0.14);
+                    color: #F4EDFF;
+                    padding: 8px 12px;
+                    font-size: 16px;
+                    font-weight: 700;
+                    text-align: left;
+                }
+                QPushButton#settingsToggleBtn:hover {
+                    background: rgba(255, 255, 255, 0.22);
+                }
                 QFrame#card {
                     border-radius: 16px;
                     background: rgba(255, 255, 255, 0.08);
@@ -684,12 +843,12 @@ class MainWindow(QMainWindow):
                 }
                 QLabel#titleLabel {
                     color: #FFFFFF;
-                    font-size: 28px;
+                    font-size: 26px;
                     font-weight: 700;
                 }
                 QLabel#subtitleLabel {
                     color: #EFE9FF;
-                    font-size: 14px;
+                    font-size: 13px;
                 }
                 QLabel#sectionTitle {
                     color: #EEE5FF;
@@ -714,8 +873,19 @@ class MainWindow(QMainWindow):
                     selection-background-color: #9E73FF;
                 }
                 QSpinBox#spinBox {
-                    min-width: 90px;
-                    padding-right: 8px;
+                    min-width: 74px;
+                    padding: 8px 6px;
+                }
+                QPushButton#stepBtn {
+                    border-radius: 10px;
+                    border: 1px solid rgba(255, 255, 255, 0.30);
+                    background: rgba(255, 255, 255, 0.12);
+                    color: #FFFFFF;
+                    font-size: 18px;
+                    font-weight: 700;
+                }
+                QPushButton#stepBtn:hover {
+                    background: rgba(255, 255, 255, 0.20);
                 }
                 QPushButton#secondaryBtn {
                     border-radius: 10px;
@@ -727,6 +897,17 @@ class MainWindow(QMainWindow):
                 }
                 QPushButton#secondaryBtn:hover {
                     background: rgba(255, 255, 255, 0.18);
+                }
+                QPushButton#themeIconBtn {
+                    border-radius: 19px;
+                    border: 1px solid rgba(255, 255, 255, 0.28);
+                    background: rgba(255, 255, 255, 0.18);
+                    color: #FFFFFF;
+                    font-size: 18px;
+                    font-weight: 700;
+                }
+                QPushButton#themeIconBtn:hover {
+                    background: rgba(255, 255, 255, 0.28);
                 }
                 QPushButton#startBtn {
                     border-radius: 12px;
@@ -774,7 +955,7 @@ class MainWindow(QMainWindow):
                         stop:0 #8E5BFF, stop:1 #C37BFF);
                 }
             """
-            self.theme_btn.setText("切换到白色主题")
+            self.theme_btn.setText("☾")
         else:
             stylesheet = """
                 #root {
@@ -786,6 +967,24 @@ class MainWindow(QMainWindow):
                     background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
                         stop:0 #8D5BFF, stop:1 #B286FF);
                 }
+                QFrame#settingsPanel {
+                    border-radius: 16px;
+                    background: #FFFFFF;
+                    border: 1px solid #DDE1EB;
+                }
+                QPushButton#settingsToggleBtn {
+                    border-radius: 11px;
+                    border: 1px solid #CFD5E3;
+                    background: #F8F9FC;
+                    color: #253148;
+                    padding: 8px 12px;
+                    font-size: 16px;
+                    font-weight: 700;
+                    text-align: left;
+                }
+                QPushButton#settingsToggleBtn:hover {
+                    background: #EEF2FA;
+                }
                 QFrame#card {
                     border-radius: 16px;
                     background: #FFFFFF;
@@ -793,12 +992,12 @@ class MainWindow(QMainWindow):
                 }
                 QLabel#titleLabel {
                     color: #FFFFFF;
-                    font-size: 28px;
+                    font-size: 26px;
                     font-weight: 700;
                 }
                 QLabel#subtitleLabel {
                     color: #F4EDFF;
-                    font-size: 14px;
+                    font-size: 13px;
                 }
                 QLabel#sectionTitle {
                     color: #1F2430;
@@ -823,8 +1022,19 @@ class MainWindow(QMainWindow):
                     selection-background-color: #BFA3FF;
                 }
                 QSpinBox#spinBox {
-                    min-width: 90px;
-                    padding-right: 8px;
+                    min-width: 74px;
+                    padding: 8px 6px;
+                }
+                QPushButton#stepBtn {
+                    border-radius: 10px;
+                    border: 1px solid #C7D0E2;
+                    background: #EEF2FA;
+                    color: #243046;
+                    font-size: 18px;
+                    font-weight: 700;
+                }
+                QPushButton#stepBtn:hover {
+                    background: #E1E8F6;
                 }
                 QPushButton#secondaryBtn {
                     border-radius: 10px;
@@ -836,6 +1046,17 @@ class MainWindow(QMainWindow):
                 }
                 QPushButton#secondaryBtn:hover {
                     background: #EEF2FA;
+                }
+                QPushButton#themeIconBtn {
+                    border-radius: 19px;
+                    border: 1px solid #C7D0E2;
+                    background: #FFFFFF;
+                    color: #283347;
+                    font-size: 18px;
+                    font-weight: 700;
+                }
+                QPushButton#themeIconBtn:hover {
+                    background: #F3F6FC;
                 }
                 QPushButton#startBtn {
                     border-radius: 12px;
@@ -883,7 +1104,7 @@ class MainWindow(QMainWindow):
                         stop:0 #8A5BFF, stop:1 #B27BFF);
                 }
             """
-            self.theme_btn.setText("切换到紫色主题")
+            self.theme_btn.setText("☼")
 
         self.setStyleSheet(stylesheet)
 
@@ -936,6 +1157,7 @@ class MainWindow(QMainWindow):
         anim.setEndValue(target)
         anim.setDuration(260)
         anim.setEasingCurve(QEasingCurve.OutCubic)
+        anim.valueChanged.connect(lambda v, b=bar: b.setFormat(f"{int(v)}%"))
         anim.start(QPropertyAnimation.DeleteWhenStopped)
 
     def _prepare_tasks(self) -> tuple[list[DownloadTask], DownloadOptions, int, Path] | None:
@@ -1026,7 +1248,7 @@ class MainWindow(QMainWindow):
             else:
                 if bar.maximum() == 0:
                     bar.setRange(0, 100)
-                    bar.setFormat("%p%")
+                bar.setFormat(f"{progress}%")
                 self._animate_progress(bar, progress)
             return
 
@@ -1041,7 +1263,7 @@ class MainWindow(QMainWindow):
             if bar:
                 if bar.maximum() == 0:
                     bar.setRange(0, 100)
-                    bar.setFormat("%p%")
+                bar.setFormat("100%")
                 self._animate_progress(bar, 100)
             if detail_item:
                 detail_item.setText(detail)
@@ -1097,7 +1319,8 @@ class MainWindow(QMainWindow):
 
 def main() -> int:
     app = QApplication(sys.argv)
-    app.setApplicationName("M3U8 Batch Downloader")
+    app.setApplicationName(APP_DISPLAY_NAME)
+    app.setWindowIcon(create_app_icon())
 
     window = MainWindow()
     window.show()

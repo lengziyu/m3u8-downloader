@@ -75,8 +75,8 @@ my_video_02|https://example.com/b.m3u8
 ## 一键产物（推荐）
 
 统一入口脚本会自动判断系统：
-- Windows: 产出 `dist\\M3U8Downloader.exe`
-- macOS: 产出 `dist/M3U8Downloader.app` 和 `dist/M3U8Downloader-macOS.dmg`
+- Windows: 产出 `dist\\M3U8-Downloader.exe`
+- macOS: 产出 `dist/M3U8-Downloader.app` 和 `dist/M3U8-Downloader-macOS.dmg`
 
 默认行为：
 - 自动安装/更新打包依赖
