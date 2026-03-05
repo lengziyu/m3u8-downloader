@@ -143,8 +143,19 @@ def hls_input_args() -> list[str]:
     ]
 
 
+def subprocess_no_window_kwargs() -> dict[str, object]:
+    if os.name != "nt":
+        return {}
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    if flags:
+        return {"creationflags": flags}
+    startupinfo = subprocess.STARTUPINFO()
+    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    return {"startupinfo": startupinfo}
+
+
 def run_ffmpeg(cmd: list[str]) -> tuple[bool, str]:
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    proc = subprocess.run(cmd, capture_output=True, text=True, **subprocess_no_window_kwargs())
     if proc.returncode == 0:
         return True, ""
     err = (proc.stderr or proc.stdout or "").strip()

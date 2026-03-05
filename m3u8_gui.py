@@ -46,6 +46,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QSizePolicy,
     QSpinBox,
     QTableWidget,
     QTableWidgetItem,
@@ -327,6 +328,17 @@ def hls_input_args() -> list[str]:
     ]
 
 
+def subprocess_no_window_kwargs() -> dict[str, object]:
+    if os.name != "nt":
+        return {}
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    if flags:
+        return {"creationflags": flags}
+    startupinfo = subprocess.STARTUPINFO()
+    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    return {"startupinfo": startupinfo}
+
+
 def probe_duration_seconds(url: str, options: DownloadOptions) -> float | None:
     if not options.ffprobe:
         return None
@@ -344,7 +356,13 @@ def probe_duration_seconds(url: str, options: DownloadOptions) -> float | None:
         url,
     ]
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=20,
+            **subprocess_no_window_kwargs(),
+        )
     except Exception:
         return None
 
@@ -393,6 +411,7 @@ def run_ffmpeg_with_progress(
         stderr=subprocess.STDOUT,
         text=True,
         bufsize=1,
+        **subprocess_no_window_kwargs(),
     )
 
     def _reader_thread(stream: object, out_queue: "queue.Queue[str | None]") -> None:
@@ -841,8 +860,9 @@ class MainWindow(QMainWindow):
         self.settings_toggle_btn = QPushButton("⚙ 设置")
         self.settings_toggle_btn.setObjectName("settingsToggleBtn")
         self.settings_toggle_btn.setMinimumHeight(40)
+        self.settings_toggle_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.settings_toggle_btn.clicked.connect(self._toggle_settings_panel)
-        settings_layout.addWidget(self.settings_toggle_btn)
+        settings_layout.addWidget(self.settings_toggle_btn, 0, Qt.AlignHCenter)
 
         self.settings_content = QWidget()
         self.settings_content.setObjectName("settingsContent")
@@ -918,8 +938,9 @@ class MainWindow(QMainWindow):
         self.version_btn = QPushButton()
         self.version_btn.setObjectName("versionBtn")
         self.version_btn.setMinimumHeight(34)
+        self.version_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.version_btn.clicked.connect(self._check_updates)
-        settings_layout.addWidget(self.version_btn, 0, Qt.AlignBottom)
+        settings_layout.addWidget(self.version_btn, 0, Qt.AlignBottom | Qt.AlignHCenter)
 
         right = QWidget()
         right_layout = QVBoxLayout(right)
@@ -974,7 +995,7 @@ class MainWindow(QMainWindow):
         action_row = QHBoxLayout()
         action_row.setSpacing(10)
 
-        self.start_btn = GlowButton("开始下载")
+        self.start_btn = QPushButton("开始下载")
         self.start_btn.setObjectName("startBtn")
         self.start_btn.setMinimumHeight(48)
         self.start_btn.clicked.connect(self._start_download)
@@ -1034,8 +1055,10 @@ class MainWindow(QMainWindow):
         header_view.setSectionResizeMode(1, QHeaderView.Stretch)
         header_view.setSectionResizeMode(2, QHeaderView.ResizeToContents)
         header_view.setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        header_view.setSectionResizeMode(4, QHeaderView.Stretch)
-        header_view.setSectionResizeMode(5, QHeaderView.ResizeToContents)
+        header_view.setSectionResizeMode(4, QHeaderView.Interactive)
+        header_view.setSectionResizeMode(5, QHeaderView.Interactive)
+        self.table.setColumnWidth(4, 280)
+        self.table.setColumnWidth(5, 180)
 
         table_layout.addLayout(table_head)
         table_layout.addWidget(self.table)
@@ -1170,11 +1193,22 @@ class MainWindow(QMainWindow):
             self.settings_toggle_btn.setMinimumSize(0, 40)
             self.settings_toggle_btn.setMaximumHeight(40)
             self.settings_toggle_btn.setMaximumWidth(16777215)
+            self.version_btn.setMinimumSize(0, 34)
+            self.version_btn.setMaximumHeight(34)
+            self.version_btn.setMaximumWidth(16777215)
             self.settings_toggle_btn.setStyleSheet("")
+            self.version_btn.setStyleSheet("")
         else:
             self.settings_toggle_btn.setMinimumSize(40, 40)
             self.settings_toggle_btn.setMaximumSize(40, 40)
-            self.settings_toggle_btn.setStyleSheet("padding: 0px; text-align: center;")
+            self.version_btn.setMinimumSize(40, 40)
+            self.version_btn.setMaximumSize(40, 40)
+            self.settings_toggle_btn.setStyleSheet(
+                "padding: 0px; text-align: center; font-size: 20px;"
+            )
+            self.version_btn.setStyleSheet(
+                "padding: 0px; text-align: center; font-size: 18px;"
+            )
 
     def _apply_theme(self, theme: str) -> None:
         if theme == "purple":
@@ -1382,7 +1416,7 @@ class MainWindow(QMainWindow):
                     text-align: center;
                     color: #FFFFFF;
                     min-width: 200px;
-                    min-height: 8px;
+                    min-height: 12px;
                 }
                 QProgressBar::chunk {
                     border-radius: 4px;
@@ -1596,7 +1630,7 @@ class MainWindow(QMainWindow):
                     text-align: center;
                     color: #1F2430;
                     min-width: 200px;
-                    min-height: 8px;
+                    min-height: 12px;
                 }
                 QProgressBar::chunk {
                     border-radius: 4px;
@@ -1635,24 +1669,33 @@ class MainWindow(QMainWindow):
         name_item = QTableWidgetItem(task.output_path.name)
         status_item = QTableWidgetItem("准备中")
         detail_item = QTableWidgetItem(task.url)
+        idx_item.setTextAlignment(Qt.AlignCenter)
+        status_item.setTextAlignment(Qt.AlignCenter)
 
         self.table.setItem(row, 0, idx_item)
         self.table.setItem(row, 1, name_item)
         self.table.setItem(row, 2, status_item)
         self.table.setItem(row, 4, detail_item)
 
+        bar_wrap = QWidget()
+        bar_layout = QHBoxLayout(bar_wrap)
+        bar_layout.setContentsMargins(8, 0, 8, 0)
+        bar_layout.setSpacing(0)
+
         bar = QProgressBar()
         bar.setRange(0, 100)
         bar.setValue(0)
-        bar.setTextVisible(False)
-        bar.setFixedHeight(8)
-        self.table.setCellWidget(row, 3, bar)
+        bar.setTextVisible(True)
+        bar.setFormat("0%")
+        bar.setFixedHeight(12)
+        bar_layout.addWidget(bar, 1, Qt.AlignVCenter)
+        self.table.setCellWidget(row, 3, bar_wrap)
         self.progress_by_index[task.index] = bar
 
         action_wrap = QWidget()
         action_layout = QHBoxLayout(action_wrap)
-        action_layout.setContentsMargins(2, 6, 2, 6)
-        action_layout.setSpacing(6)
+        action_layout.setContentsMargins(10, 6, 10, 6)
+        action_layout.setSpacing(10)
 
         pause_btn = QPushButton("暂停")
         pause_btn.setObjectName("rowPauseBtn")
@@ -1674,7 +1717,9 @@ class MainWindow(QMainWindow):
         item = self.table.item(row, 2)
         if item is None:
             return
-        item.setText(text)
+        shown = f"  {text}  " if text == "正在下载" else text
+        item.setText(shown)
+        item.setTextAlignment(Qt.AlignCenter)
         item.setForeground(QBrush(color))
 
     def _animate_progress(self, bar: QProgressBar, target: int) -> None:
@@ -1827,15 +1872,11 @@ class MainWindow(QMainWindow):
 
         existing_urls = {u.strip() for u in self.task_url_by_index.values()}
         filtered: list[tuple[str | None, str]] = []
-        duplicate_count = 0
-        invalid_count = 0
         for name, url in raw_entries:
             final_url = url.strip()
             if not is_probable_url(final_url):
-                invalid_count += 1
                 continue
             if final_url in existing_urls:
-                duplicate_count += 1
                 continue
             filtered.append((name, final_url))
             existing_urls.add(final_url)
@@ -1867,13 +1908,7 @@ class MainWindow(QMainWindow):
         if added > 0:
             self.pause_all_btn.setEnabled(True)
             self.add_more_btn.setEnabled(True)
-            msg = f"已新增 {added} 个任务"
-            if duplicate_count:
-                msg += f"，忽略重复 {duplicate_count}"
-            if invalid_count:
-                msg += f"，忽略无效 {invalid_count}"
-            self.summary_label.setText(msg)
-            self.url_input.clear()
+            self.summary_label.setText(f"已新增 {added} 个任务")
 
     def _start_download(self) -> None:
         prepared = self._prepare_tasks()
@@ -1892,7 +1927,6 @@ class MainWindow(QMainWindow):
 
         self.summary_label.setText(f"任务 {len(tasks)} 条，准备开始...")
         self.start_btn.setEnabled(False)
-        self.start_btn.set_busy(True)
         self.add_more_btn.setEnabled(True)
 
         self.worker = BatchWorker(tasks, options, jobs, output_dir)
@@ -2042,7 +2076,6 @@ class MainWindow(QMainWindow):
     @Slot()
     def _on_worker_finished(self) -> None:
         self.start_btn.setEnabled(True)
-        self.start_btn.set_busy(False)
         self.pause_all_btn.setEnabled(False)
         self.add_more_btn.setEnabled(False)
         self.worker = None
