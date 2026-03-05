@@ -17,6 +17,10 @@ from urllib.parse import unquote, urlparse
 
 
 PRINT_LOCK = threading.Lock()
+DEFAULT_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
+)
 
 
 @dataclass(frozen=True)
@@ -94,8 +98,7 @@ def header_args(
     user_agent: str | None, referer: str | None, headers: list[str] | None
 ) -> list[str]:
     args: list[str] = []
-    if user_agent:
-        args.extend(["-user_agent", user_agent])
+    args.extend(["-user_agent", user_agent or DEFAULT_USER_AGENT])
     merged_headers: list[str] = []
     if referer:
         merged_headers.append(f"Referer: {referer}")
@@ -105,6 +108,19 @@ def header_args(
         header_blob = "".join(f"{line}\r\n" for line in merged_headers)
         args.extend(["-headers", header_blob])
     return args
+
+
+def hls_input_args() -> list[str]:
+    return [
+        "-allowed_extensions",
+        "ALL",
+        "-reconnect",
+        "1",
+        "-reconnect_streamed",
+        "1",
+        "-reconnect_delay_max",
+        "8",
+    ]
 
 
 def run_ffmpeg(cmd: list[str]) -> tuple[bool, str]:
@@ -139,6 +155,7 @@ def download_one(
     ]
     if timeout > 0:
         common.extend(["-rw_timeout", str(timeout * 1_000_000)])
+    common.extend(hls_input_args())
     common.extend(header_args(user_agent, referer, headers))
     common.extend(["-i", task.url])
 

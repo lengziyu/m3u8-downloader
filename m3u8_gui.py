@@ -47,6 +47,12 @@ from PySide6.QtWidgets import (
 )
 
 
+DEFAULT_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
+)
+
+
 @dataclass(frozen=True)
 class DownloadTask:
     index: int
@@ -164,9 +170,7 @@ def resolve_ffprobe_bin() -> str | None:
 
 
 def header_args(user_agent: str | None, referer: str | None, headers: list[str]) -> list[str]:
-    args: list[str] = []
-    if user_agent:
-        args.extend(["-user_agent", user_agent])
+    args: list[str] = ["-user_agent", user_agent or DEFAULT_USER_AGENT]
 
     merged_headers: list[str] = []
     if referer:
@@ -179,6 +183,19 @@ def header_args(user_agent: str | None, referer: str | None, headers: list[str])
     return args
 
 
+def hls_input_args() -> list[str]:
+    return [
+        "-allowed_extensions",
+        "ALL",
+        "-reconnect",
+        "1",
+        "-reconnect_streamed",
+        "1",
+        "-reconnect_delay_max",
+        "8",
+    ]
+
+
 def probe_duration_seconds(url: str, options: DownloadOptions) -> float | None:
     if not options.ffprobe:
         return None
@@ -187,6 +204,7 @@ def probe_duration_seconds(url: str, options: DownloadOptions) -> float | None:
         options.ffprobe,
         "-v",
         "error",
+        *hls_input_args(),
         *header_args(options.user_agent, options.referer, options.headers),
         "-show_entries",
         "format=duration",
@@ -231,6 +249,7 @@ def run_ffmpeg_with_progress(
     if options.timeout > 0:
         cmd.extend(["-rw_timeout", str(options.timeout * 1_000_000)])
 
+    cmd.extend(hls_input_args())
     cmd.extend(header_args(options.user_agent, options.referer, options.headers))
     cmd.extend(["-i", task.url])
     cmd.extend(codec_args)
