@@ -1,0 +1,4 @@
+# 每行一个 m3u8 URL
+# 或者使用 文件名|URL 自定义输出文件名
+# 示例：episode01|https://example.com/video01.m3u8
+https://example.com/demo.m3u8
