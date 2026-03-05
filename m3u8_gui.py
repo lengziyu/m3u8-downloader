@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import datetime as dt
+import json
 import os
 import queue
 import re
@@ -11,6 +12,10 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
+import urllib.request
+import webbrowser
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -55,6 +60,8 @@ DEFAULT_USER_AGENT = (
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
 )
 APP_DISPLAY_NAME = "M3U8-Downloader"
+APP_VERSION = "1.0.0"
+GITHUB_REPO = os.environ.get("M3U8_DOWNLOADER_GITHUB_REPO", "YOUR_GITHUB_OWNER/YOUR_REPO")
 
 
 @dataclass(frozen=True)
@@ -177,6 +184,43 @@ def build_tasks(entries: list[tuple[str | None, str]], output_dir: Path) -> list
     return tasks
 
 
+def parse_version(value: str) -> tuple[int, ...]:
+    text = value.strip().lower()
+    if text.startswith("v"):
+        text = text[1:]
+    nums = re.findall(r"\d+", text)
+    return tuple(int(n) for n in nums[:4])
+
+
+def is_newer_version(current: str, latest: str) -> bool:
+    cur = parse_version(current)
+    lat = parse_version(latest)
+    if not cur or not lat:
+        return latest.strip() != current.strip()
+    length = max(len(cur), len(lat))
+    cur_pad = cur + (0,) * (length - len(cur))
+    lat_pad = lat + (0,) * (length - len(lat))
+    return lat_pad > cur_pad
+
+
+def fetch_latest_release(repo: str) -> tuple[str, str]:
+    api_url = f"https://api.github.com/repos/{repo}/releases/latest"
+    req = urllib.request.Request(
+        api_url,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": APP_DISPLAY_NAME,
+        },
+    )
+    with urllib.request.urlopen(req, timeout=12) as resp:
+        payload = json.loads(resp.read().decode("utf-8", errors="replace"))
+    tag = str(payload.get("tag_name") or payload.get("name") or "").strip()
+    html_url = str(payload.get("html_url") or f"https://github.com/{repo}/releases").strip()
+    if not tag:
+        raise RuntimeError("未读取到 release tag_name。")
+    return tag, html_url
+
+
 def _candidate_binary_names(name: str) -> list[str]:
     if os.name == "nt" and not name.lower().endswith(".exe"):
         return [name, f"{name}.exe"]
@@ -295,6 +339,7 @@ def run_ffmpeg_with_progress(
     codec_args: list[str],
     duration: float | None,
     on_progress: Callable[[int], None],
+    should_abort: Callable[[], str | None] | None = None,
 ) -> tuple[bool, str | None]:
     cmd = [
         options.ffmpeg,
@@ -342,11 +387,21 @@ def run_ffmpeg_with_progress(
     last_activity = time.monotonic()
     error_lines: list[str] = []
     while True:
+        if should_abort:
+            abort_status = should_abort()
+            if abort_status:
+                proc.kill()
+                return False, f"__ABORT__:{abort_status}"
         try:
             raw_line = out_queue.get(timeout=1.0)
         except queue.Empty:
             if proc.poll() is not None:
                 break
+            if should_abort:
+                abort_status = should_abort()
+                if abort_status:
+                    proc.kill()
+                    return False, f"__ABORT__:{abort_status}"
             if time.monotonic() - last_activity > stall_timeout:
                 proc.kill()
                 return False, f"连接超时（{stall_timeout}s 无响应）"
@@ -393,6 +448,7 @@ def download_single_task(
     options: DownloadOptions,
     on_stage: Callable[[str], None],
     on_progress: Callable[[int], None],
+    should_abort: Callable[[], str | None] | None = None,
 ) -> tuple[str, str | None]:
     if task.output_path.exists() and not options.overwrite:
         return "skipped", "目标文件已存在"
@@ -426,27 +482,44 @@ def download_single_task(
     total_attempts = options.retries + 1
 
     for attempt in range(1, total_attempts + 1):
+        if should_abort:
+            abort_status = should_abort()
+            if abort_status:
+                return abort_status, "任务已中断"
         on_stage(f"下载中（尝试 {attempt}/{total_attempts}）")
-        ok, err = run_ffmpeg_with_progress(task, options, copy_args, duration, on_progress)
+        ok, err = run_ffmpeg_with_progress(
+            task, options, copy_args, duration, on_progress, should_abort
+        )
         if ok:
             on_progress(100)
             return "ok", None
+        if err and err.startswith("__ABORT__:"):
+            return err.split(":", 1)[1], "任务已中断"
 
         last_error = f"copy 失败: {err or 'unknown'}"
 
         if options.transcode_on_fail:
             on_stage("copy 失败，转码中")
             ok2, err2 = run_ffmpeg_with_progress(
-                task, options, transcode_args, duration, on_progress
+                task, options, transcode_args, duration, on_progress, should_abort
             )
             if ok2:
                 on_progress(100)
                 return "ok", "copy 失败，已自动转码"
+            if err2 and err2.startswith("__ABORT__:"):
+                return err2.split(":", 1)[1], "任务已中断"
             last_error = f"{last_error}; transcode 失败: {err2 or 'unknown'}"
 
         if attempt < total_attempts:
             on_stage("重试等待中")
-            time.sleep(min(2 * attempt, 8))
+            wait_time = min(2 * attempt, 8)
+            end_time = time.monotonic() + wait_time
+            while time.monotonic() < end_time:
+                if should_abort:
+                    abort_status = should_abort()
+                    if abort_status:
+                        return abort_status, "任务已中断"
+                time.sleep(0.2)
 
     return "failed", last_error
 
@@ -486,16 +559,91 @@ class BatchWorker(QObject):
         self.options = options
         self.jobs = max(1, jobs)
         self.output_dir = output_dir
+        self._task_map = {task.index: task for task in tasks}
+        self._pending: deque[int] = deque(task.index for task in tasks)
+        self._manual_paused: set[int] = set()
+        self._deleted: set[int] = set()
+        self._done: set[int] = set()
+        self._global_paused = False
+        self._running_controls: dict[int, tuple[threading.Event, list[str]]] = {}
+        self._lock = threading.Lock()
+
+    def apply_command(self, action: str, task_index: int | None = None) -> None:
+        with self._lock:
+            running = set(self._running_controls.keys())
+
+            if action == "pause_all":
+                self._global_paused = True
+                for idx, (event, reason) in self._running_controls.items():
+                    reason[0] = "paused"
+                    event.set()
+                return
+
+            if action == "resume_all":
+                self._global_paused = False
+                return
+
+            if action == "delete_all":
+                targets = [idx for idx in self._task_map if idx not in self._done]
+                for idx in targets:
+                    self._deleted.add(idx)
+                    self._manual_paused.discard(idx)
+                    if idx in running:
+                        event, reason = self._running_controls[idx]
+                        reason[0] = "deleted"
+                        event.set()
+                    else:
+                        self._done.add(idx)
+                        self.task_update.emit(idx, "deleted", 0, "已删除")
+                return
+
+            if task_index is None or task_index not in self._task_map:
+                return
+
+            if action == "pause":
+                if task_index in self._done or task_index in self._deleted:
+                    return
+                self._manual_paused.add(task_index)
+                if task_index in running:
+                    event, reason = self._running_controls[task_index]
+                    reason[0] = "paused"
+                    event.set()
+                else:
+                    self.task_update.emit(task_index, "paused", 0, "已暂停")
+                return
+
+            if action == "resume":
+                if task_index in self._done or task_index in self._deleted:
+                    return
+                self._manual_paused.discard(task_index)
+                self.task_update.emit(task_index, "stage", -2, "等待执行")
+                return
+
+            if action == "delete":
+                if task_index in self._done:
+                    return
+                self._deleted.add(task_index)
+                self._manual_paused.discard(task_index)
+                if task_index in running:
+                    event, reason = self._running_controls[task_index]
+                    reason[0] = "deleted"
+                    event.set()
+                else:
+                    self._done.add(task_index)
+                    self.task_update.emit(task_index, "deleted", 0, "已删除")
+                return
 
     @Slot()
     def run(self) -> None:
         success = 0
         skipped = 0
         failed = 0
+        deleted = 0
         failures: list[tuple[DownloadTask, str]] = []
-        lock = threading.Lock()
-
-        def run_one(task: DownloadTask) -> tuple[str, DownloadTask, str | None]:
+        
+        def run_one(
+            task: DownloadTask, stop_event: threading.Event, stop_reason: list[str]
+        ) -> tuple[str, DownloadTask, str | None]:
             self.task_update.emit(task.index, "running", 0, "准备中")
 
             def stage_cb(stage: str) -> None:
@@ -504,26 +652,91 @@ class BatchWorker(QObject):
             def progress_cb(percent: int) -> None:
                 self.task_update.emit(task.index, "progress", percent, "")
 
-            status, detail = download_single_task(task, self.options, stage_cb, progress_cb)
+            def should_abort() -> str | None:
+                if stop_event.is_set():
+                    return stop_reason[0]
+                return None
+
+            status, detail = download_single_task(
+                task, self.options, stage_cb, progress_cb, should_abort
+            )
             return status, task, detail
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=self.jobs) as pool:
-            future_map = {pool.submit(run_one, task): task for task in self.tasks}
-            for future in concurrent.futures.as_completed(future_map):
-                status, task, detail = future.result()
-                if status == "ok":
-                    with lock:
+            running_futures: dict[concurrent.futures.Future[tuple[str, DownloadTask, str | None]], int] = {}
+
+            while True:
+                with self._lock:
+                    pending_active = [
+                        idx for idx in self._pending if idx not in self._done and idx not in self._deleted
+                    ]
+
+                    if not self._global_paused:
+                        spin = len(self._pending)
+                        while spin > 0 and len(running_futures) < self.jobs:
+                            spin -= 1
+                            if not self._pending:
+                                break
+                            idx = self._pending.popleft()
+                            if idx in self._done or idx in self._deleted:
+                                continue
+                            if idx in self._manual_paused:
+                                self._pending.append(idx)
+                                continue
+                            task = self._task_map[idx]
+                            stop_event = threading.Event()
+                            stop_reason = ["paused"]
+                            self._running_controls[idx] = (stop_event, stop_reason)
+                            fut = pool.submit(run_one, task, stop_event, stop_reason)
+                            running_futures[fut] = idx
+
+                if not running_futures and not pending_active:
+                    break
+
+                if not running_futures:
+                    time.sleep(0.12)
+                    continue
+
+                done_set, _ = concurrent.futures.wait(
+                    running_futures.keys(),
+                    timeout=0.25,
+                    return_when=concurrent.futures.FIRST_COMPLETED,
+                )
+                if not done_set:
+                    continue
+
+                for future in done_set:
+                    idx = running_futures.pop(future)
+                    with self._lock:
+                        self._running_controls.pop(idx, None)
+                    try:
+                        status, task, detail = future.result()
+                    except Exception as exc:  # pragma: no cover
+                        status = "failed"
+                        task = self._task_map[idx]
+                        detail = str(exc)
+
+                    with self._lock:
+                        if status in {"ok", "skipped", "failed", "deleted"}:
+                            self._done.add(task.index)
+                        if status == "paused" and task.index not in self._deleted:
+                            self._pending.append(task.index)
+
+                    if status == "ok":
                         success += 1
-                    self.task_update.emit(task.index, "ok", 100, detail or "下载完成")
-                elif status == "skipped":
-                    with lock:
+                        self.task_update.emit(task.index, "ok", 100, detail or "下载完成")
+                    elif status == "skipped":
                         skipped += 1
-                    self.task_update.emit(task.index, "skipped", 100, detail or "已跳过")
-                else:
-                    with lock:
+                        self.task_update.emit(task.index, "skipped", 100, detail or "已跳过")
+                    elif status == "paused":
+                        self.task_update.emit(task.index, "paused", 0, detail or "已暂停")
+                    elif status == "deleted":
+                        deleted += 1
+                        self.task_update.emit(task.index, "deleted", 0, detail or "已删除")
+                    else:
                         failed += 1
-                    failures.append((task, detail or "未知错误"))
-                    self.task_update.emit(task.index, "failed", 0, detail or "下载失败")
+                        failures.append((task, detail or "未知错误"))
+                        self.task_update.emit(task.index, "failed", 0, detail or "下载失败")
 
         failure_file = ""
         if failures:
@@ -540,10 +753,12 @@ class BatchWorker(QObject):
             failure_path.write_text("\n".join(lines), encoding="utf-8")
             failure_file = str(failure_path)
 
-        self.batch_done.emit(success, skipped, failed, failure_file)
+        self.batch_done.emit(success, skipped + deleted, failed, failure_file)
 
 
 class MainWindow(QMainWindow):
+    update_check_done = Signal(str, str, str)
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle(APP_DISPLAY_NAME)
@@ -557,13 +772,20 @@ class MainWindow(QMainWindow):
         self.worker: BatchWorker | None = None
         self.row_by_index: dict[int, int] = {}
         self.progress_by_index: dict[int, QProgressBar] = {}
+        self.pause_btn_by_index: dict[int, QPushButton] = {}
+        self.delete_btn_by_index: dict[int, QPushButton] = {}
+        self.task_status_by_index: dict[int, str] = {}
+        self.pause_all_active = False
+        self.update_checking = False
 
         self._build_ui()
+        self.update_check_done.connect(self._on_update_check_done)
         self._apply_theme(self.current_theme)
         self._animate_window_enter()
 
     def _build_ui(self) -> None:
         root = QWidget(self)
+        self.root_widget = root
         root.setObjectName("root")
         self.setCentralWidget(root)
         shell = QHBoxLayout(root)
@@ -655,6 +877,12 @@ class MainWindow(QMainWindow):
         settings_content_layout.addStretch(1)
         settings_layout.addWidget(self.settings_content, 1)
 
+        self.version_btn = QPushButton()
+        self.version_btn.setObjectName("versionBtn")
+        self.version_btn.setMinimumHeight(34)
+        self.version_btn.clicked.connect(self._check_updates)
+        settings_layout.addWidget(self.version_btn, 0, Qt.AlignBottom)
+
         right = QWidget()
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(0, 0, 0, 0)
@@ -727,11 +955,29 @@ class MainWindow(QMainWindow):
         table_layout.setContentsMargins(16, 12, 16, 14)
         table_layout.setSpacing(10)
 
+        table_head = QHBoxLayout()
+        table_head.setSpacing(10)
         table_title = QLabel("任务进度")
         table_title.setObjectName("sectionTitle")
+        table_head.addWidget(table_title)
+        table_head.addStretch(1)
 
-        self.table = QTableWidget(0, 5)
-        self.table.setHorizontalHeaderLabels(["序号", "输出文件", "状态", "进度", "详情"])
+        self.pause_all_btn = QPushButton("暂停全部")
+        self.pause_all_btn.setObjectName("tableActionBtn")
+        self.pause_all_btn.setMinimumHeight(36)
+        self.pause_all_btn.clicked.connect(self._toggle_pause_all)
+        self.pause_all_btn.setEnabled(False)
+
+        self.clear_tasks_btn = QPushButton("清空任务")
+        self.clear_tasks_btn.setObjectName("dangerBtn")
+        self.clear_tasks_btn.setMinimumHeight(36)
+        self.clear_tasks_btn.clicked.connect(self._clear_tasks_confirm)
+
+        table_head.addWidget(self.pause_all_btn)
+        table_head.addWidget(self.clear_tasks_btn)
+
+        self.table = QTableWidget(0, 6)
+        self.table.setHorizontalHeaderLabels(["序号", "输出文件", "状态", "进度", "详情", "操作"])
         self.table.verticalHeader().setVisible(False)
         self.table.setAlternatingRowColors(True)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
@@ -744,14 +990,25 @@ class MainWindow(QMainWindow):
         header_view.setSectionResizeMode(2, QHeaderView.ResizeToContents)
         header_view.setSectionResizeMode(3, QHeaderView.ResizeToContents)
         header_view.setSectionResizeMode(4, QHeaderView.Stretch)
+        header_view.setSectionResizeMode(5, QHeaderView.ResizeToContents)
 
-        table_layout.addWidget(table_title)
+        table_layout.addLayout(table_head)
         table_layout.addWidget(self.table)
         right_layout.addWidget(table_card, 1)
 
         shell.addWidget(self.settings_panel, 0)
         shell.addWidget(right, 1)
+
+        self.floating_settings_btn = QPushButton("⚙")
+        self.floating_settings_btn.setObjectName("floatingSettingsBtn")
+        self.floating_settings_btn.setParent(self.root_widget)
+        self.floating_settings_btn.setFixedSize(48, 48)
+        self.floating_settings_btn.clicked.connect(self._toggle_settings_panel)
+        self.floating_settings_btn.hide()
+        self.floating_settings_btn.raise_()
+
         self._set_settings_panel_expanded(True, animate=False)
+        self._reposition_floating_settings()
 
     def _animate_window_enter(self) -> None:
         self.setWindowOpacity(0.0)
@@ -774,9 +1031,89 @@ class MainWindow(QMainWindow):
     def _toggle_settings_panel(self) -> None:
         self._set_settings_panel_expanded(not self.settings_panel_expanded, animate=True)
 
+    def _update_version_btn_text(self) -> None:
+        if self.settings_panel_expanded:
+            if self.update_checking:
+                self.version_btn.setText(f"⟳ 检查中... v{APP_VERSION}")
+            else:
+                self.version_btn.setText(f"⟳ v{APP_VERSION}")
+        else:
+            self.version_btn.setText("⟳")
+
+    def _check_updates(self) -> None:
+        if self.update_checking:
+            return
+        if not GITHUB_REPO or GITHUB_REPO.startswith("YOUR_GITHUB_OWNER/"):
+            QMessageBox.information(
+                self,
+                "版本检测",
+                "未配置 GitHub 仓库。请设置 m3u8_gui.py 中的 GITHUB_REPO，或设置环境变量 "
+                "M3U8_DOWNLOADER_GITHUB_REPO=owner/repo。",
+            )
+            return
+
+        self.update_checking = True
+        self.version_btn.setEnabled(False)
+        self._update_version_btn_text()
+
+        def worker() -> None:
+            try:
+                latest, release_url = fetch_latest_release(GITHUB_REPO)
+                if is_newer_version(APP_VERSION, latest):
+                    self.update_check_done.emit("update", latest, release_url)
+                else:
+                    self.update_check_done.emit("latest", latest, release_url)
+            except urllib.error.HTTPError as exc:
+                self.update_check_done.emit("error", f"HTTP {exc.code}", "")
+            except Exception as exc:
+                self.update_check_done.emit("error", str(exc), "")
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    @Slot(str, str, str)
+    def _on_update_check_done(self, status: str, latest: str, release_url: str) -> None:
+        self.update_checking = False
+        self.version_btn.setEnabled(True)
+        self._update_version_btn_text()
+
+        if status == "latest":
+            QMessageBox.information(
+                self,
+                "版本检测",
+                f"已是最新版本。\n当前版本：v{APP_VERSION}\n最新版本：{latest}",
+            )
+            return
+
+        if status == "update":
+            ret = QMessageBox.question(
+                self,
+                "发现新版本",
+                f"当前版本：v{APP_VERSION}\n最新版本：{latest}\n\n是否前往 Releases 下载更新？",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes,
+            )
+            if ret == QMessageBox.Yes and release_url:
+                webbrowser.open(release_url)
+            return
+
+        QMessageBox.warning(self, "版本检测失败", f"无法检测更新：{latest}")
+
+    def _reposition_floating_settings(self) -> None:
+        if not hasattr(self, "floating_settings_btn"):
+            return
+        margin_right = 30
+        margin_bottom = 26
+        x = max(0, self.root_widget.width() - self.floating_settings_btn.width() - margin_right)
+        y = max(0, self.root_widget.height() - self.floating_settings_btn.height() - margin_bottom)
+        self.floating_settings_btn.move(x, y)
+
+    def resizeEvent(self, event) -> None:  # type: ignore[override]
+        super().resizeEvent(event)
+        self._reposition_floating_settings()
+
     def _set_settings_panel_expanded(self, expanded: bool, animate: bool) -> None:
         self.settings_panel_expanded = expanded
-        target = 280 if expanded else 64
+        target = 280 if expanded else 0
         current = self.settings_panel.maximumWidth()
 
         if self.settings_anim:
@@ -801,6 +1138,11 @@ class MainWindow(QMainWindow):
         self.settings_content.setVisible(expanded)
         self.settings_toggle_btn.setText("⚙ 设置" if expanded else "⚙")
         self.settings_toggle_btn.setToolTip("收起设置" if expanded else "展开设置")
+        self.floating_settings_btn.setVisible(not expanded)
+        if not expanded:
+            self.floating_settings_btn.raise_()
+        self._reposition_floating_settings()
+        self._update_version_btn_text()
         if expanded:
             self.settings_toggle_btn.setStyleSheet("")
         else:
@@ -835,6 +1177,21 @@ class MainWindow(QMainWindow):
                 }
                 QPushButton#settingsToggleBtn:hover {
                     background: rgba(255, 255, 255, 0.22);
+                }
+                QPushButton#versionBtn {
+                    border-radius: 10px;
+                    border: 1px solid rgba(255, 255, 255, 0.24);
+                    background: rgba(255, 255, 255, 0.10);
+                    color: #EFE6FF;
+                    font-weight: 700;
+                    padding: 7px 10px;
+                    text-align: left;
+                }
+                QPushButton#versionBtn:hover {
+                    background: rgba(255, 255, 255, 0.18);
+                }
+                QPushButton#versionBtn:disabled {
+                    color: #BFAEE6;
                 }
                 QFrame#card {
                     border-radius: 16px;
@@ -909,6 +1266,17 @@ class MainWindow(QMainWindow):
                 QPushButton#themeIconBtn:hover {
                     background: rgba(255, 255, 255, 0.28);
                 }
+                QPushButton#floatingSettingsBtn {
+                    border-radius: 24px;
+                    border: 1px solid rgba(255, 255, 255, 0.28);
+                    background: rgba(124, 71, 255, 0.92);
+                    color: #FFFFFF;
+                    font-size: 22px;
+                    font-weight: 700;
+                }
+                QPushButton#floatingSettingsBtn:hover {
+                    background: rgba(146, 95, 255, 0.98);
+                }
                 QPushButton#startBtn {
                     border-radius: 12px;
                     border: 0;
@@ -924,6 +1292,54 @@ class MainWindow(QMainWindow):
                 QPushButton#startBtn:disabled {
                     background: #7059A6;
                     color: #D9CFFF;
+                }
+                QPushButton#tableActionBtn {
+                    border-radius: 10px;
+                    border: 1px solid rgba(255, 255, 255, 0.26);
+                    background: rgba(255, 255, 255, 0.14);
+                    color: #F2EBFF;
+                    padding: 8px 12px;
+                    font-weight: 700;
+                }
+                QPushButton#tableActionBtn:hover {
+                    background: rgba(255, 255, 255, 0.22);
+                }
+                QPushButton#tableActionBtn:disabled {
+                    background: rgba(255, 255, 255, 0.10);
+                    color: #B8A7DF;
+                }
+                QPushButton#dangerBtn {
+                    border-radius: 10px;
+                    border: 1px solid rgba(255, 132, 145, 0.68);
+                    background: rgba(255, 104, 124, 0.24);
+                    color: #FFD9DF;
+                    padding: 8px 12px;
+                    font-weight: 700;
+                }
+                QPushButton#dangerBtn:hover {
+                    background: rgba(255, 104, 124, 0.34);
+                }
+                QPushButton#rowPauseBtn {
+                    border-radius: 8px;
+                    border: 1px solid rgba(255, 255, 255, 0.24);
+                    background: rgba(255, 255, 255, 0.12);
+                    color: #FFFFFF;
+                    padding: 5px 10px;
+                    font-weight: 700;
+                }
+                QPushButton#rowPauseBtn:hover {
+                    background: rgba(255, 255, 255, 0.20);
+                }
+                QPushButton#rowDeleteBtn {
+                    border-radius: 8px;
+                    border: 1px solid rgba(255, 132, 145, 0.68);
+                    background: rgba(255, 104, 124, 0.22);
+                    color: #FFD9DF;
+                    padding: 5px 10px;
+                    font-weight: 700;
+                }
+                QPushButton#rowDeleteBtn:hover {
+                    background: rgba(255, 104, 124, 0.34);
                 }
                 QTableWidget {
                     border: 1px solid rgba(255, 255, 255, 0.20);
@@ -984,6 +1400,21 @@ class MainWindow(QMainWindow):
                 }
                 QPushButton#settingsToggleBtn:hover {
                     background: #EEF2FA;
+                }
+                QPushButton#versionBtn {
+                    border-radius: 10px;
+                    border: 1px solid #CFD5E3;
+                    background: #F8F9FC;
+                    color: #2A3346;
+                    font-weight: 700;
+                    padding: 7px 10px;
+                    text-align: left;
+                }
+                QPushButton#versionBtn:hover {
+                    background: #EEF2FA;
+                }
+                QPushButton#versionBtn:disabled {
+                    color: #8C99B1;
                 }
                 QFrame#card {
                     border-radius: 16px;
@@ -1058,6 +1489,17 @@ class MainWindow(QMainWindow):
                 QPushButton#themeIconBtn:hover {
                     background: #F3F6FC;
                 }
+                QPushButton#floatingSettingsBtn {
+                    border-radius: 24px;
+                    border: 1px solid #BDA7F7;
+                    background: #8A5BFF;
+                    color: #FFFFFF;
+                    font-size: 22px;
+                    font-weight: 700;
+                }
+                QPushButton#floatingSettingsBtn:hover {
+                    background: #9C70FF;
+                }
                 QPushButton#startBtn {
                     border-radius: 12px;
                     border: 0;
@@ -1073,6 +1515,54 @@ class MainWindow(QMainWindow):
                 QPushButton#startBtn:disabled {
                     background: #AD9BD8;
                     color: #F4EEFF;
+                }
+                QPushButton#tableActionBtn {
+                    border-radius: 10px;
+                    border: 1px solid #CAD2E5;
+                    background: #F2F5FB;
+                    color: #263247;
+                    padding: 8px 12px;
+                    font-weight: 700;
+                }
+                QPushButton#tableActionBtn:hover {
+                    background: #E8EEF8;
+                }
+                QPushButton#tableActionBtn:disabled {
+                    background: #F7F9FD;
+                    color: #96A2BA;
+                }
+                QPushButton#dangerBtn {
+                    border-radius: 10px;
+                    border: 1px solid #F1A6B2;
+                    background: #FFE7EB;
+                    color: #A12C44;
+                    padding: 8px 12px;
+                    font-weight: 700;
+                }
+                QPushButton#dangerBtn:hover {
+                    background: #FFDCE3;
+                }
+                QPushButton#rowPauseBtn {
+                    border-radius: 8px;
+                    border: 1px solid #CAD2E5;
+                    background: #F2F5FB;
+                    color: #243146;
+                    padding: 5px 10px;
+                    font-weight: 700;
+                }
+                QPushButton#rowPauseBtn:hover {
+                    background: #E8EEF8;
+                }
+                QPushButton#rowDeleteBtn {
+                    border-radius: 8px;
+                    border: 1px solid #F1A6B2;
+                    background: #FFE7EB;
+                    color: #A12C44;
+                    padding: 5px 10px;
+                    font-weight: 700;
+                }
+                QPushButton#rowDeleteBtn:hover {
+                    background: #FFDCE3;
                 }
                 QTableWidget {
                     border: 1px solid #D9DFEC;
@@ -1107,6 +1597,7 @@ class MainWindow(QMainWindow):
             self.theme_btn.setText("☼")
 
         self.setStyleSheet(stylesheet)
+        self._update_version_btn_text()
 
     def _toggle_theme(self) -> None:
         self.current_theme = "light" if self.current_theme == "purple" else "purple"
@@ -1126,6 +1617,7 @@ class MainWindow(QMainWindow):
         row = self.table.rowCount()
         self.table.insertRow(row)
         self.row_by_index[task.index] = row
+        self.task_status_by_index[task.index] = "waiting"
 
         idx_item = QTableWidgetItem(str(task.index))
         name_item = QTableWidgetItem(task.output_path.name)
@@ -1144,6 +1636,27 @@ class MainWindow(QMainWindow):
         self.table.setCellWidget(row, 3, bar)
         self.progress_by_index[task.index] = bar
 
+        action_wrap = QWidget()
+        action_layout = QHBoxLayout(action_wrap)
+        action_layout.setContentsMargins(2, 2, 2, 2)
+        action_layout.setSpacing(6)
+
+        pause_btn = QPushButton("暂停")
+        pause_btn.setObjectName("rowPauseBtn")
+        pause_btn.setMinimumHeight(28)
+        pause_btn.clicked.connect(lambda _, idx=task.index: self._on_row_pause_clicked(idx))
+
+        delete_btn = QPushButton("删除")
+        delete_btn.setObjectName("rowDeleteBtn")
+        delete_btn.setMinimumHeight(28)
+        delete_btn.clicked.connect(lambda _, idx=task.index: self._on_row_delete_clicked(idx))
+
+        action_layout.addWidget(pause_btn)
+        action_layout.addWidget(delete_btn)
+        self.table.setCellWidget(row, 5, action_wrap)
+        self.pause_btn_by_index[task.index] = pause_btn
+        self.delete_btn_by_index[task.index] = delete_btn
+
     def _set_status(self, row: int, text: str, color: QColor) -> None:
         item = self.table.item(row, 2)
         if item is None:
@@ -1159,6 +1672,95 @@ class MainWindow(QMainWindow):
         anim.setEasingCurve(QEasingCurve.OutCubic)
         anim.valueChanged.connect(lambda v, b=bar: b.setFormat(f"{int(v)}%"))
         anim.start(QPropertyAnimation.DeleteWhenStopped)
+
+    def _set_pause_btn_state(self, task_index: int, paused: bool, enabled: bool = True) -> None:
+        btn = self.pause_btn_by_index.get(task_index)
+        if not btn:
+            return
+        btn.setText("继续" if paused else "暂停")
+        btn.setEnabled(enabled)
+
+    def _set_delete_btn_enabled(self, task_index: int, enabled: bool) -> None:
+        btn = self.delete_btn_by_index.get(task_index)
+        if btn:
+            btn.setEnabled(enabled)
+
+    def _on_row_pause_clicked(self, task_index: int) -> None:
+        if not self.worker:
+            return
+        status = self.task_status_by_index.get(task_index, "waiting")
+        if status in {"deleted", "ok", "failed", "skipped"}:
+            return
+        if status == "paused":
+            self.worker.apply_command("resume", task_index)
+            self.task_status_by_index[task_index] = "waiting"
+            self._set_pause_btn_state(task_index, paused=False)
+        else:
+            self.worker.apply_command("pause", task_index)
+            self.task_status_by_index[task_index] = "paused"
+            self._set_pause_btn_state(task_index, paused=True)
+
+    def _on_row_delete_clicked(self, task_index: int) -> None:
+        if not self.worker:
+            return
+        ret = QMessageBox.question(
+            self,
+            "确认删除",
+            "确定删除这个任务吗？运行中的任务会立即中断。",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if ret != QMessageBox.Yes:
+            return
+        self.worker.apply_command("delete", task_index)
+
+    def _toggle_pause_all(self) -> None:
+        if not self.worker:
+            return
+        if self.pause_all_active:
+            self.worker.apply_command("resume_all")
+            self.pause_all_active = False
+            self.pause_all_btn.setText("暂停全部")
+        else:
+            self.worker.apply_command("pause_all")
+            self.pause_all_active = True
+            self.pause_all_btn.setText("继续全部")
+
+    def _clear_table_ui(self) -> None:
+        self.table.setRowCount(0)
+        self.row_by_index.clear()
+        self.progress_by_index.clear()
+        self.pause_btn_by_index.clear()
+        self.delete_btn_by_index.clear()
+        self.task_status_by_index.clear()
+
+    def _clear_tasks_confirm(self) -> None:
+        if self.worker:
+            ret = QMessageBox.question(
+                self,
+                "确认清空任务",
+                "确定清空所有任务吗？正在下载的任务会被中断。",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if ret != QMessageBox.Yes:
+                return
+            self.worker.apply_command("delete_all")
+            self.summary_label.setText("已请求清空任务，等待当前线程退出...")
+            return
+
+        if self.table.rowCount() == 0:
+            return
+        ret = QMessageBox.question(
+            self,
+            "确认清空任务",
+            "确定清空任务列表吗？",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if ret == QMessageBox.Yes:
+            self._clear_table_ui()
+            self.summary_label.setText("任务列表已清空")
 
     def _prepare_tasks(self) -> tuple[list[DownloadTask], DownloadOptions, int, Path] | None:
         raw_entries = parse_url_lines(self.url_input.toPlainText())
@@ -1202,9 +1804,11 @@ class MainWindow(QMainWindow):
             return
         tasks, options, jobs, output_dir = prepared
 
-        self.table.setRowCount(0)
-        self.row_by_index.clear()
-        self.progress_by_index.clear()
+        self._clear_table_ui()
+        self.pause_all_active = False
+        self.pause_all_btn.setText("暂停全部")
+        self.pause_all_btn.setEnabled(True)
+        self.clear_tasks_btn.setEnabled(True)
 
         for task in tasks:
             self._add_table_row(task)
@@ -1233,11 +1837,13 @@ class MainWindow(QMainWindow):
         if row is None:
             return
 
+        self.task_status_by_index[task_index] = status
         bar = self.progress_by_index.get(task_index)
         detail_item = self.table.item(row, 4)
 
         if status == "stage":
             self._set_status(row, detail, QColor("#42A5F5") if self.current_theme == "light" else QColor("#9CC8FF"))
+            self._set_pause_btn_state(task_index, paused=False)
             return
 
         if status == "progress" and bar:
@@ -1254,12 +1860,16 @@ class MainWindow(QMainWindow):
 
         if status == "running":
             self._set_status(row, "开始下载", QColor("#3E63DD") if self.current_theme == "light" else QColor("#A7C5FF"))
+            self._set_pause_btn_state(task_index, paused=False)
+            self._set_delete_btn_enabled(task_index, True)
             if detail_item:
                 detail_item.setText(detail)
             return
 
         if status == "ok":
             self._set_status(row, "已完成", QColor("#1F8F4D") if self.current_theme == "light" else QColor("#86E3A8"))
+            self._set_pause_btn_state(task_index, paused=False, enabled=False)
+            self._set_delete_btn_enabled(task_index, False)
             if bar:
                 if bar.maximum() == 0:
                     bar.setRange(0, 100)
@@ -1271,6 +1881,8 @@ class MainWindow(QMainWindow):
 
         if status == "skipped":
             self._set_status(row, "已跳过", QColor("#AD6E00") if self.current_theme == "light" else QColor("#FFD287"))
+            self._set_pause_btn_state(task_index, paused=False, enabled=False)
+            self._set_delete_btn_enabled(task_index, False)
             if bar:
                 bar.setRange(0, 100)
                 bar.setValue(100)
@@ -1279,8 +1891,33 @@ class MainWindow(QMainWindow):
                 detail_item.setText(detail)
             return
 
+        if status == "paused":
+            self._set_status(row, "已暂停", QColor("#A37200") if self.current_theme == "light" else QColor("#FFD287"))
+            self._set_pause_btn_state(task_index, paused=True)
+            if bar and bar.maximum() == 0:
+                bar.setRange(0, 100)
+                bar.setValue(0)
+                bar.setFormat("暂停")
+            if detail_item:
+                detail_item.setText(detail)
+            return
+
+        if status == "deleted":
+            self._set_status(row, "已删除", QColor("#C62828") if self.current_theme == "light" else QColor("#FF9A9A"))
+            self._set_pause_btn_state(task_index, paused=False, enabled=False)
+            self._set_delete_btn_enabled(task_index, False)
+            if bar:
+                bar.setRange(0, 100)
+                bar.setValue(0)
+                bar.setFormat("已删")
+            if detail_item:
+                detail_item.setText(detail)
+            return
+
         if status == "failed":
             self._set_status(row, "下载失败", QColor("#C62828") if self.current_theme == "light" else QColor("#FF9A9A"))
+            self._set_pause_btn_state(task_index, paused=False, enabled=False)
+            self._set_delete_btn_enabled(task_index, False)
             if bar:
                 bar.setRange(0, 100)
                 bar.setValue(0)
@@ -1291,6 +1928,8 @@ class MainWindow(QMainWindow):
 
     @Slot(int, int, int, str)
     def _on_batch_done(self, success: int, skipped: int, failed: int, failure_file: str) -> None:
+        self.pause_all_active = False
+        self.pause_all_btn.setText("暂停全部")
         text = f"完成：成功 {success} | 跳过 {skipped} | 失败 {failed}"
         if failure_file:
             text += f" | 失败清单：{failure_file}"
@@ -1313,6 +1952,7 @@ class MainWindow(QMainWindow):
     def _on_worker_finished(self) -> None:
         self.start_btn.setEnabled(True)
         self.start_btn.set_busy(False)
+        self.pause_all_btn.setEnabled(False)
         self.worker = None
         self.worker_thread = None
 

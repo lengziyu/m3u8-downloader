@@ -101,6 +101,53 @@ scripts\build_windows.bat
 scripts/build_mac.command
 ```
 
+## 标准安装器（向导安装）
+
+如果你要“下一步-下一步-选择安装目录”的标准安装体验，用这一组脚本：
+
+- Windows 安装器（Inno Setup 向导）：
+```bat
+scripts\build_windows_installer.bat
+```
+产物：
+- `dist\\M3U8-Downloader-Setup.exe`
+
+- macOS 安装器（Installer 向导）：
+```bash
+./scripts/build_mac_installer.sh
+```
+或双击：
+```bash
+scripts/build_mac_installer.command
+```
+产物：
+- `dist/M3U8-Downloader-Installer.pkg`
+- `dist/M3U8-Downloader-Installer.dmg`
+
+说明：
+- Windows 需要预装 Inno Setup 6（含 `iscc` 编译器）。
+- macOS 使用系统 `pkgbuild` + `hdiutil`，无需额外安装。
+
+## 版本检测（GitHub Releases）
+
+应用内设置栏底部有版本按钮，点击会检测是否有新版本（使用 GitHub Releases API）。
+
+请先配置仓库（任选一种）：
+
+1. 修改 [m3u8_gui.py](/Users/lens/Documents/web/lengziyu/gitee/m3u8-download/m3u8_gui.py) 中：
+- `GITHUB_REPO = "你的GitHub用户名/仓库名"`
+
+2. 或运行时设置环境变量：
+```bash
+M3U8_DOWNLOADER_GITHUB_REPO=owner/repo
+```
+
+然后在设置栏底部点击版本按钮：
+- 已最新：弹窗提示“已是最新版本”
+- 有新版本：弹窗并可跳转 Releases 下载页面
+
+Releases 当然可以作为下载源，推荐把安装器都放在 Releases 里。
+
 ## 手动参数（可选）
 
 底层统一脚本是：
@@ -133,6 +180,29 @@ python3 scripts/build_oneclick.py --index-url https://pypi.tuna.tsinghua.edu.cn/
 - `scripts/build_windows.bat`: Windows 一键打包入口
 - `scripts/build_mac.sh`: macOS 一键打包入口
 - `scripts/build_mac.command`: macOS 双击打包入口
+- `scripts/build_installer.py`: 跨平台标准安装器构建脚本
+- `scripts/build_windows_installer.bat`: Windows 安装器构建入口
+- `scripts/build_mac_installer.sh`: macOS 安装器构建入口
+- `scripts/build_mac_installer.command`: macOS 安装器双击入口
+- `.github/workflows/release.yml`: Tag 自动构建并发布 Release
+
+## 发布到 GitHub 注意事项
+
+1. 仓库与版本
+- 确认 `GITHUB_REPO` 配置正确。
+- 确认 `APP_VERSION` 与你准备发布的版本一致（例如 `1.0.0`）。
+
+2. 产物建议
+- Windows：`M3U8-Downloader-Setup.exe`
+- macOS：`M3U8-Downloader-Installer.pkg` / `M3U8-Downloader-Installer.dmg`
+
+3. 自动发布
+- 本项目已提供 GitHub Actions 工作流：
+  - 推送 tag（如 `v1.0.0`）后自动构建并发布 Release 资产。
+
+4. 安全与信任（正式分发建议）
+- Windows：建议代码签名证书，减少 SmartScreen 警告。
+- macOS：建议 Apple Developer 签名与 notarize，避免“无法验证开发者”提示。
 
 ## 注意事项
 
