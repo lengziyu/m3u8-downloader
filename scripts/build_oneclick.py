@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parent.parent
 DIST_DIR = ROOT / "dist"
 DEFAULT_VENV_DIR = ROOT / ".build-venv"
 PIP_TRUSTED_HOSTS = ["pypi.org", "files.pythonhosted.org", "pypi.python.org"]
-PIP_INSTALL_FLAGS = ["--default-timeout", "120", "--retries", "10", "--resume-retries", "10"]
+PIP_INSTALL_FLAGS = ["--default-timeout", "120", "--retries", "10"]
 
 
 def run_cmd(cmd: list[str]) -> None:
