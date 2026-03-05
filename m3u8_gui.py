@@ -61,7 +61,7 @@ DEFAULT_USER_AGENT = (
 )
 APP_DISPLAY_NAME = "M3U8-Downloader"
 APP_VERSION = "1.0.0"
-GITHUB_REPO = os.environ.get("M3U8_DOWNLOADER_GITHUB_REPO", "YOUR_GITHUB_OWNER/YOUR_REPO")
+GITHUB_REPO = os.environ.get("M3U8_DOWNLOADER_GITHUB_REPO", "lengziyu/m3u8-downloader")
 
 
 @dataclass(frozen=True)
