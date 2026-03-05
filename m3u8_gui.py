@@ -4,6 +4,7 @@ from __future__ import annotations
 import concurrent.futures
 import datetime as dt
 import os
+import queue
 import re
 import shutil
 import subprocess
@@ -263,34 +264,62 @@ def run_ffmpeg_with_progress(
         bufsize=1,
     )
 
-    error_lines: list[str] = []
-    try:
-        assert proc.stdout is not None
-        for raw_line in proc.stdout:
-            line = raw_line.strip()
-            if not line:
-                continue
+    def _reader_thread(stream: object, out_queue: "queue.Queue[str | None]") -> None:
+        if stream is None:
+            out_queue.put(None)
+            return
+        for line in stream:
+            out_queue.put(line)
+        out_queue.put(None)
 
-            if "=" in line:
-                key, value = line.split("=", 1)
-                if key == "out_time_ms":
-                    if duration and duration > 0:
-                        try:
-                            current_sec = int(value) / 1_000_000
-                            percent = max(0, min(99, int((current_sec / duration) * 100)))
-                            on_progress(percent)
-                        except ValueError:
-                            pass
-                    else:
-                        on_progress(-1)
-                elif key == "progress" and value == "end":
-                    on_progress(100)
-            else:
-                error_lines.append(line)
-                if len(error_lines) > 8:
-                    error_lines = error_lines[-8:]
-    finally:
-        return_code = proc.wait()
+    out_queue: "queue.Queue[str | None]" = queue.Queue()
+    reader = threading.Thread(
+        target=_reader_thread, args=(proc.stdout, out_queue), daemon=True
+    )
+    reader.start()
+
+    stall_timeout = options.timeout if options.timeout > 0 else 30
+    last_activity = time.monotonic()
+    error_lines: list[str] = []
+    while True:
+        try:
+            raw_line = out_queue.get(timeout=1.0)
+        except queue.Empty:
+            if proc.poll() is not None:
+                break
+            if time.monotonic() - last_activity > stall_timeout:
+                proc.kill()
+                return False, f"连接超时（{stall_timeout}s 无响应）"
+            continue
+
+        if raw_line is None:
+            break
+
+        last_activity = time.monotonic()
+        line = raw_line.strip()
+        if not line:
+            continue
+
+        if "=" in line:
+            key, value = line.split("=", 1)
+            if key == "out_time_ms":
+                if duration and duration > 0:
+                    try:
+                        current_sec = int(value) / 1_000_000
+                        percent = max(0, min(99, int((current_sec / duration) * 100)))
+                        on_progress(percent)
+                    except ValueError:
+                        pass
+                else:
+                    on_progress(-1)
+            elif key == "progress" and value == "end":
+                on_progress(100)
+        else:
+            error_lines.append(line)
+            if len(error_lines) > 8:
+                error_lines = error_lines[-8:]
+
+    return_code = proc.wait()
 
     if return_code == 0:
         return True, None
@@ -928,7 +957,7 @@ class MainWindow(QMainWindow):
             ffprobe=resolve_ffprobe_bin(),
             retries=self.retries_input.value(),
             overwrite=False,
-            timeout=0,
+            timeout=30,
             user_agent=None,
             referer=None,
             headers=[],
