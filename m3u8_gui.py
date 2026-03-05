@@ -1106,6 +1106,7 @@ class MainWindow(QMainWindow):
         x = max(0, self.root_widget.width() - self.floating_settings_btn.width() - margin_right)
         y = max(0, self.root_widget.height() - self.floating_settings_btn.height() - margin_bottom)
         self.floating_settings_btn.move(x, y)
+        self.floating_settings_btn.raise_()
 
     def resizeEvent(self, event) -> None:  # type: ignore[override]
         super().resizeEvent(event)
@@ -1113,11 +1114,14 @@ class MainWindow(QMainWindow):
 
     def _set_settings_panel_expanded(self, expanded: bool, animate: bool) -> None:
         self.settings_panel_expanded = expanded
-        target = 280 if expanded else 0
+        target = 280 if expanded else 56
         current = self.settings_panel.maximumWidth()
 
         if self.settings_anim:
-            self.settings_anim.stop()
+            try:
+                self.settings_anim.stop()
+            except RuntimeError:
+                pass
             self.settings_anim = None
 
         if animate:
@@ -1129,7 +1133,8 @@ class MainWindow(QMainWindow):
                 anim.setDuration(220)
                 anim.setEasingCurve(QEasingCurve.OutCubic)
                 group.addAnimation(anim)
-            group.start(QPropertyAnimation.DeleteWhenStopped)
+            group.finished.connect(lambda: setattr(self, "settings_anim", None))
+            group.start()
             self.settings_anim = group
         else:
             self.settings_panel.setMinimumWidth(target)
