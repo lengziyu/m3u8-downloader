@@ -89,19 +89,40 @@ def sanitize_filename(name: str) -> str:
     return cleaned or "video"
 
 
+def is_probable_url(text: str) -> bool:
+    value = text.strip().lower()
+    return value.startswith("http://") or value.startswith("https://")
+
+
 def parse_url_lines(raw_text: str) -> list[tuple[str | None, str]]:
     entries: list[tuple[str | None, str]] = []
     for line in raw_text.splitlines():
         text = line.strip()
         if not text or text.startswith("#"):
             continue
+
+        # Allow paste format like "url1|url2|url3"
         if "|" in text:
+            parts = [p.strip() for p in text.split("|") if p.strip()]
+            if parts and all(is_probable_url(p) for p in parts):
+                for p in parts:
+                    entries.append((None, p))
+                continue
+
             name, url = text.split("|", 1)
             final_url = url.strip()
-            if final_url:
+            if final_url and is_probable_url(final_url):
                 entries.append((name.strip() or None, final_url))
-        else:
-            entries.append((None, text))
+                continue
+
+        # Allow multiple URLs separated by spaces in one line.
+        tokens = [t.strip() for t in re.split(r"\s+", text) if t.strip()]
+        if len(tokens) > 1 and all(is_probable_url(t) for t in tokens):
+            for t in tokens:
+                entries.append((None, t))
+            continue
+
+        entries.append((None, text))
     return entries
 
 
@@ -168,18 +189,23 @@ def create_app_icon(size: int = 256) -> QIcon:
     return QIcon(pix)
 
 
-def build_tasks(entries: list[tuple[str | None, str]], output_dir: Path) -> list[DownloadTask]:
+def build_tasks(
+    entries: list[tuple[str | None, str]],
+    output_dir: Path,
+    start_index: int = 1,
+    used_names: set[str] | None = None,
+) -> list[DownloadTask]:
     tasks: list[DownloadTask] = []
-    used_names: set[str] = set()
-    for idx, (name, url) in enumerate(entries, start=1):
+    local_used = used_names if used_names is not None else set()
+    for idx, (name, url) in enumerate(entries, start=start_index):
         candidate = build_output_name(idx, url, name)
         stem = Path(candidate).stem
         final = candidate
         suffix = 1
-        while final.lower() in used_names:
+        while final.lower() in local_used:
             final = f"{stem}_{suffix}.mp4"
             suffix += 1
-        used_names.add(final.lower())
+        local_used.add(final.lower())
         tasks.append(DownloadTask(index=idx, url=url, output_path=output_dir / final))
     return tasks
 
@@ -633,6 +659,18 @@ class BatchWorker(QObject):
                     self.task_update.emit(task_index, "deleted", 0, "已删除")
                 return
 
+    def enqueue_tasks(self, tasks: list[DownloadTask]) -> int:
+        added = 0
+        with self._lock:
+            for task in tasks:
+                if task.index in self._task_map:
+                    continue
+                self.tasks.append(task)
+                self._task_map[task.index] = task
+                self._pending.append(task.index)
+                added += 1
+        return added
+
     @Slot()
     def run(self) -> None:
         success = 0
@@ -775,6 +813,7 @@ class MainWindow(QMainWindow):
         self.pause_btn_by_index: dict[int, QPushButton] = {}
         self.delete_btn_by_index: dict[int, QPushButton] = {}
         self.task_status_by_index: dict[int, str] = {}
+        self.task_url_by_index: dict[int, str] = {}
         self.pause_all_active = False
         self.update_checking = False
 
@@ -785,7 +824,6 @@ class MainWindow(QMainWindow):
 
     def _build_ui(self) -> None:
         root = QWidget(self)
-        self.root_widget = root
         root.setObjectName("root")
         self.setCentralWidget(root)
         shell = QHBoxLayout(root)
@@ -941,10 +979,17 @@ class MainWindow(QMainWindow):
         self.start_btn.setMinimumHeight(48)
         self.start_btn.clicked.connect(self._start_download)
 
+        self.add_more_btn = QPushButton("继续添加")
+        self.add_more_btn.setObjectName("tableActionBtn")
+        self.add_more_btn.setMinimumHeight(48)
+        self.add_more_btn.setEnabled(False)
+        self.add_more_btn.clicked.connect(self._append_tasks_while_running)
+
         self.summary_label = QLabel("等待开始")
         self.summary_label.setObjectName("summaryLabel")
 
         action_row.addWidget(self.start_btn, 0)
+        action_row.addWidget(self.add_more_btn, 0)
         action_row.addWidget(self.summary_label, 1)
         right_layout.addLayout(action_row)
 
@@ -999,16 +1044,7 @@ class MainWindow(QMainWindow):
         shell.addWidget(self.settings_panel, 0)
         shell.addWidget(right, 1)
 
-        self.floating_settings_btn = QPushButton("⚙")
-        self.floating_settings_btn.setObjectName("floatingSettingsBtn")
-        self.floating_settings_btn.setParent(self.root_widget)
-        self.floating_settings_btn.setFixedSize(48, 48)
-        self.floating_settings_btn.clicked.connect(self._toggle_settings_panel)
-        self.floating_settings_btn.hide()
-        self.floating_settings_btn.raise_()
-
         self._set_settings_panel_expanded(True, animate=False)
-        self._reposition_floating_settings()
 
     def _animate_window_enter(self) -> None:
         self.setWindowOpacity(0.0)
@@ -1098,23 +1134,9 @@ class MainWindow(QMainWindow):
 
         QMessageBox.warning(self, "版本检测失败", f"无法检测更新：{latest}")
 
-    def _reposition_floating_settings(self) -> None:
-        if not hasattr(self, "floating_settings_btn"):
-            return
-        margin_right = 30
-        margin_bottom = 26
-        x = max(0, self.root_widget.width() - self.floating_settings_btn.width() - margin_right)
-        y = max(0, self.root_widget.height() - self.floating_settings_btn.height() - margin_bottom)
-        self.floating_settings_btn.move(x, y)
-        self.floating_settings_btn.raise_()
-
-    def resizeEvent(self, event) -> None:  # type: ignore[override]
-        super().resizeEvent(event)
-        self._reposition_floating_settings()
-
     def _set_settings_panel_expanded(self, expanded: bool, animate: bool) -> None:
         self.settings_panel_expanded = expanded
-        target = 280 if expanded else 56
+        target = 280 if expanded else 72
         current = self.settings_panel.maximumWidth()
 
         if self.settings_anim:
@@ -1143,14 +1165,15 @@ class MainWindow(QMainWindow):
         self.settings_content.setVisible(expanded)
         self.settings_toggle_btn.setText("⚙ 设置" if expanded else "⚙")
         self.settings_toggle_btn.setToolTip("收起设置" if expanded else "展开设置")
-        self.floating_settings_btn.setVisible(not expanded)
-        if not expanded:
-            self.floating_settings_btn.raise_()
-        self._reposition_floating_settings()
         self._update_version_btn_text()
         if expanded:
+            self.settings_toggle_btn.setMinimumSize(0, 40)
+            self.settings_toggle_btn.setMaximumHeight(40)
+            self.settings_toggle_btn.setMaximumWidth(16777215)
             self.settings_toggle_btn.setStyleSheet("")
         else:
+            self.settings_toggle_btn.setMinimumSize(40, 40)
+            self.settings_toggle_btn.setMaximumSize(40, 40)
             self.settings_toggle_btn.setStyleSheet("padding: 0px; text-align: center;")
 
     def _apply_theme(self, theme: str) -> None:
@@ -1271,17 +1294,6 @@ class MainWindow(QMainWindow):
                 QPushButton#themeIconBtn:hover {
                     background: rgba(255, 255, 255, 0.28);
                 }
-                QPushButton#floatingSettingsBtn {
-                    border-radius: 24px;
-                    border: 1px solid rgba(255, 255, 255, 0.28);
-                    background: rgba(124, 71, 255, 0.92);
-                    color: #FFFFFF;
-                    font-size: 22px;
-                    font-weight: 700;
-                }
-                QPushButton#floatingSettingsBtn:hover {
-                    background: rgba(146, 95, 255, 0.98);
-                }
                 QPushButton#startBtn {
                     border-radius: 12px;
                     border: 0;
@@ -1329,8 +1341,9 @@ class MainWindow(QMainWindow):
                     border: 1px solid rgba(255, 255, 255, 0.24);
                     background: rgba(255, 255, 255, 0.12);
                     color: #FFFFFF;
-                    padding: 5px 10px;
-                    font-weight: 700;
+                    padding: 2px 8px;
+                    font-size: 11px;
+                    font-weight: 650;
                 }
                 QPushButton#rowPauseBtn:hover {
                     background: rgba(255, 255, 255, 0.20);
@@ -1340,8 +1353,9 @@ class MainWindow(QMainWindow):
                     border: 1px solid rgba(255, 132, 145, 0.68);
                     background: rgba(255, 104, 124, 0.22);
                     color: #FFD9DF;
-                    padding: 5px 10px;
-                    font-weight: 700;
+                    padding: 2px 8px;
+                    font-size: 11px;
+                    font-weight: 650;
                 }
                 QPushButton#rowDeleteBtn:hover {
                     background: rgba(255, 104, 124, 0.34);
@@ -1363,15 +1377,15 @@ class MainWindow(QMainWindow):
                 }
                 QProgressBar {
                     border: 1px solid rgba(255, 255, 255, 0.24);
-                    border-radius: 8px;
+                    border-radius: 5px;
                     background: rgba(255, 255, 255, 0.07);
                     text-align: center;
                     color: #FFFFFF;
                     min-width: 200px;
-                    min-height: 18px;
+                    min-height: 8px;
                 }
                 QProgressBar::chunk {
-                    border-radius: 7px;
+                    border-radius: 4px;
                     background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
                         stop:0 #8E5BFF, stop:1 #C37BFF);
                 }
@@ -1494,17 +1508,6 @@ class MainWindow(QMainWindow):
                 QPushButton#themeIconBtn:hover {
                     background: #F3F6FC;
                 }
-                QPushButton#floatingSettingsBtn {
-                    border-radius: 24px;
-                    border: 1px solid #BDA7F7;
-                    background: #8A5BFF;
-                    color: #FFFFFF;
-                    font-size: 22px;
-                    font-weight: 700;
-                }
-                QPushButton#floatingSettingsBtn:hover {
-                    background: #9C70FF;
-                }
                 QPushButton#startBtn {
                     border-radius: 12px;
                     border: 0;
@@ -1552,8 +1555,9 @@ class MainWindow(QMainWindow):
                     border: 1px solid #CAD2E5;
                     background: #F2F5FB;
                     color: #243146;
-                    padding: 5px 10px;
-                    font-weight: 700;
+                    padding: 2px 8px;
+                    font-size: 11px;
+                    font-weight: 650;
                 }
                 QPushButton#rowPauseBtn:hover {
                     background: #E8EEF8;
@@ -1563,8 +1567,9 @@ class MainWindow(QMainWindow):
                     border: 1px solid #F1A6B2;
                     background: #FFE7EB;
                     color: #A12C44;
-                    padding: 5px 10px;
-                    font-weight: 700;
+                    padding: 2px 8px;
+                    font-size: 11px;
+                    font-weight: 650;
                 }
                 QPushButton#rowDeleteBtn:hover {
                     background: #FFDCE3;
@@ -1586,15 +1591,15 @@ class MainWindow(QMainWindow):
                 }
                 QProgressBar {
                     border: 1px solid #CBD4E6;
-                    border-radius: 8px;
+                    border-radius: 5px;
                     background: #F7F9FD;
                     text-align: center;
                     color: #1F2430;
                     min-width: 200px;
-                    min-height: 18px;
+                    min-height: 8px;
                 }
                 QProgressBar::chunk {
-                    border-radius: 7px;
+                    border-radius: 4px;
                     background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
                         stop:0 #8A5BFF, stop:1 #B27BFF);
                 }
@@ -1621,12 +1626,14 @@ class MainWindow(QMainWindow):
     def _add_table_row(self, task: DownloadTask) -> None:
         row = self.table.rowCount()
         self.table.insertRow(row)
+        self.table.setRowHeight(row, 44)
         self.row_by_index[task.index] = row
         self.task_status_by_index[task.index] = "waiting"
+        self.task_url_by_index[task.index] = task.url
 
         idx_item = QTableWidgetItem(str(task.index))
         name_item = QTableWidgetItem(task.output_path.name)
-        status_item = QTableWidgetItem("等待中")
+        status_item = QTableWidgetItem("准备中")
         detail_item = QTableWidgetItem(task.url)
 
         self.table.setItem(row, 0, idx_item)
@@ -1637,23 +1644,24 @@ class MainWindow(QMainWindow):
         bar = QProgressBar()
         bar.setRange(0, 100)
         bar.setValue(0)
-        bar.setFormat("0%")
+        bar.setTextVisible(False)
+        bar.setFixedHeight(8)
         self.table.setCellWidget(row, 3, bar)
         self.progress_by_index[task.index] = bar
 
         action_wrap = QWidget()
         action_layout = QHBoxLayout(action_wrap)
-        action_layout.setContentsMargins(2, 2, 2, 2)
+        action_layout.setContentsMargins(2, 6, 2, 6)
         action_layout.setSpacing(6)
 
         pause_btn = QPushButton("暂停")
         pause_btn.setObjectName("rowPauseBtn")
-        pause_btn.setMinimumHeight(28)
+        pause_btn.setMinimumHeight(24)
         pause_btn.clicked.connect(lambda _, idx=task.index: self._on_row_pause_clicked(idx))
 
         delete_btn = QPushButton("删除")
         delete_btn.setObjectName("rowDeleteBtn")
-        delete_btn.setMinimumHeight(28)
+        delete_btn.setMinimumHeight(24)
         delete_btn.clicked.connect(lambda _, idx=task.index: self._on_row_delete_clicked(idx))
 
         action_layout.addWidget(pause_btn)
@@ -1738,6 +1746,7 @@ class MainWindow(QMainWindow):
         self.pause_btn_by_index.clear()
         self.delete_btn_by_index.clear()
         self.task_status_by_index.clear()
+        self.task_url_by_index.clear()
 
     def _clear_tasks_confirm(self) -> None:
         if self.worker:
@@ -1803,6 +1812,69 @@ class MainWindow(QMainWindow):
         jobs = self.jobs_input.value()
         return tasks, options, jobs, output_dir
 
+    def _append_tasks_while_running(self) -> None:
+        if not self.worker or not self.worker_thread or not self.worker_thread.isRunning():
+            QMessageBox.information(self, "提示", "当前没有运行中的任务，请使用“开始下载”。")
+            return
+
+        raw_entries = parse_url_lines(self.url_input.toPlainText())
+        if not raw_entries:
+            QMessageBox.warning(self, "提示", "请输入要继续添加的链接。")
+            return
+
+        output_dir = Path(self.output_dir_input.text().strip()).expanduser().resolve()
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        existing_urls = {u.strip() for u in self.task_url_by_index.values()}
+        filtered: list[tuple[str | None, str]] = []
+        duplicate_count = 0
+        invalid_count = 0
+        for name, url in raw_entries:
+            final_url = url.strip()
+            if not is_probable_url(final_url):
+                invalid_count += 1
+                continue
+            if final_url in existing_urls:
+                duplicate_count += 1
+                continue
+            filtered.append((name, final_url))
+            existing_urls.add(final_url)
+
+        if not filtered:
+            QMessageBox.information(
+                self,
+                "提示",
+                "没有可添加的新任务（可能都重复或格式无效）。",
+            )
+            return
+
+        used_names = {
+            self.table.item(r, 1).text().strip().lower()
+            for r in range(self.table.rowCount())
+            if self.table.item(r, 1)
+        }
+        start_index = (max(self.row_by_index.keys()) + 1) if self.row_by_index else 1
+        new_tasks = build_tasks(
+            filtered,
+            output_dir=output_dir,
+            start_index=start_index,
+            used_names=used_names,
+        )
+        for task in new_tasks:
+            self._add_table_row(task)
+
+        added = self.worker.enqueue_tasks(new_tasks)
+        if added > 0:
+            self.pause_all_btn.setEnabled(True)
+            self.add_more_btn.setEnabled(True)
+            msg = f"已新增 {added} 个任务"
+            if duplicate_count:
+                msg += f"，忽略重复 {duplicate_count}"
+            if invalid_count:
+                msg += f"，忽略无效 {invalid_count}"
+            self.summary_label.setText(msg)
+            self.url_input.clear()
+
     def _start_download(self) -> None:
         prepared = self._prepare_tasks()
         if not prepared:
@@ -1821,6 +1893,7 @@ class MainWindow(QMainWindow):
         self.summary_label.setText(f"任务 {len(tasks)} 条，准备开始...")
         self.start_btn.setEnabled(False)
         self.start_btn.set_busy(True)
+        self.add_more_btn.setEnabled(True)
 
         self.worker = BatchWorker(tasks, options, jobs, output_dir)
         self.worker_thread = QThread(self)
@@ -1847,7 +1920,20 @@ class MainWindow(QMainWindow):
         detail_item = self.table.item(row, 4)
 
         if status == "stage":
-            self._set_status(row, detail, QColor("#42A5F5") if self.current_theme == "light" else QColor("#9CC8FF"))
+            if "下载中" in detail:
+                self._set_status(
+                    row,
+                    "正在下载",
+                    QColor("#42A5F5") if self.current_theme == "light" else QColor("#9CC8FF"),
+                )
+            else:
+                self._set_status(
+                    row,
+                    detail,
+                    QColor("#42A5F5") if self.current_theme == "light" else QColor("#9CC8FF"),
+                )
+            if detail_item:
+                detail_item.setText(detail)
             self._set_pause_btn_state(task_index, paused=False)
             return
 
@@ -1864,7 +1950,7 @@ class MainWindow(QMainWindow):
             return
 
         if status == "running":
-            self._set_status(row, "开始下载", QColor("#3E63DD") if self.current_theme == "light" else QColor("#A7C5FF"))
+            self._set_status(row, "准备中", QColor("#3E63DD") if self.current_theme == "light" else QColor("#A7C5FF"))
             self._set_pause_btn_state(task_index, paused=False)
             self._set_delete_btn_enabled(task_index, True)
             if detail_item:
@@ -1958,6 +2044,7 @@ class MainWindow(QMainWindow):
         self.start_btn.setEnabled(True)
         self.start_btn.set_busy(False)
         self.pause_all_btn.setEnabled(False)
+        self.add_more_btn.setEnabled(False)
         self.worker = None
         self.worker_thread = None
 
