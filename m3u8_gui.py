@@ -46,8 +46,10 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QSpinBox,
+    QTabWidget,
     QTableWidget,
     QTableWidgetItem,
     QTextEdit,
@@ -488,6 +490,73 @@ def run_ffmpeg_with_progress(
     return False, err or "ffmpeg 执行失败"
 
 
+def validate_output_media(path: Path, options: DownloadOptions) -> tuple[bool, str | None]:
+    if not path.exists():
+        return False, "输出文件不存在"
+    if path.stat().st_size < 256 * 1024:
+        return False, "输出文件过小"
+
+    if options.ffprobe:
+        probe_cmd = [
+            options.ffprobe,
+            "-v",
+            "error",
+            "-print_format",
+            "json",
+            "-show_streams",
+            "-show_format",
+            str(path),
+        ]
+        proc = subprocess.run(
+            probe_cmd,
+            capture_output=True,
+            text=True,
+            **subprocess_no_window_kwargs(),
+        )
+        if proc.returncode != 0:
+            return False, "ffprobe 校验失败"
+        try:
+            payload = json.loads(proc.stdout or "{}")
+        except json.JSONDecodeError:
+            return False, "ffprobe 输出异常"
+        streams = payload.get("streams") or []
+        video_streams = [s for s in streams if s.get("codec_type") == "video"]
+        if not video_streams:
+            return False, "无视频流"
+        duration_text = (payload.get("format") or {}).get("duration")
+        try:
+            if duration_text is not None and float(duration_text) <= 0.4:
+                return False, "时长异常"
+        except (TypeError, ValueError):
+            pass
+
+    # Decode smoke test: many "can't play mp4" cases are detected here.
+    test_cmd = [
+        options.ffmpeg,
+        "-v",
+        "error",
+        "-ss",
+        "0",
+        "-t",
+        "1.5",
+        "-i",
+        str(path),
+        "-f",
+        "null",
+        "-",
+    ]
+    test_proc = subprocess.run(
+        test_cmd,
+        capture_output=True,
+        text=True,
+        **subprocess_no_window_kwargs(),
+    )
+    if test_proc.returncode != 0:
+        return False, "解码测试失败"
+
+    return True, None
+
+
 def download_single_task(
     task: DownloadTask,
     options: DownloadOptions,
@@ -515,6 +584,12 @@ def download_single_task(
         "veryfast",
         "-crf",
         "23",
+        "-pix_fmt",
+        "yuv420p",
+        "-r",
+        "30",
+        "-vsync",
+        "cfr",
         "-c:a",
         "aac",
         "-b:a",
@@ -536,8 +611,32 @@ def download_single_task(
             task, options, copy_args, duration, on_progress, should_abort
         )
         if ok:
-            on_progress(100)
-            return "ok", None
+            on_stage("校验文件")
+            media_ok, media_reason = validate_output_media(task.output_path, options)
+            if media_ok:
+                on_progress(100)
+                return "ok", None
+            if options.transcode_on_fail:
+                on_stage("copy 成功但文件异常，转码修复中")
+                try:
+                    if task.output_path.exists():
+                        task.output_path.unlink()
+                except OSError:
+                    pass
+                ok2, err2 = run_ffmpeg_with_progress(
+                    task, options, transcode_args, duration, on_progress, should_abort
+                )
+                if ok2:
+                    on_stage("校验文件")
+                    media_ok2, media_reason2 = validate_output_media(task.output_path, options)
+                    if media_ok2:
+                        on_progress(100)
+                        return "ok", "copy 文件异常，已自动转码修复"
+                    return "failed", f"转码后校验失败: {media_reason2 or 'unknown'}"
+                if err2 and err2.startswith("__ABORT__:"):
+                    return err2.split(":", 1)[1], "任务已中断"
+                return "failed", f"copy 成功但文件异常({media_reason}); 转码失败: {err2 or 'unknown'}"
+            return "failed", f"copy 成功但文件异常: {media_reason or 'unknown'}"
         if err and err.startswith("__ABORT__:"):
             return err.split(":", 1)[1], "任务已中断"
 
@@ -975,21 +1074,64 @@ class MainWindow(QMainWindow):
         input_layout.setContentsMargins(20, 18, 20, 18)
         input_layout.setSpacing(10)
 
-        input_title = QLabel("M3U8 链接输入（支持多行；格式可为 文件名|URL）")
+        input_title = QLabel("M3U8 链接输入")
         input_title.setObjectName("sectionTitle")
 
+        self.input_tabs = QTabWidget()
+        self.input_tabs.setObjectName("inputTabs")
+        self.input_tabs.setMinimumHeight(190)
+
+        single_tab = QWidget()
+        single_layout = QVBoxLayout(single_tab)
+        single_layout.setContentsMargins(6, 8, 6, 6)
+        single_layout.setSpacing(8)
+
+        single_hint = QLabel("逐条输入：每个输入框一个链接，填完会自动新增下一行")
+        single_hint.setObjectName("subtitleLabel")
+        single_layout.addWidget(single_hint)
+
+        self.single_scroll = QScrollArea()
+        self.single_scroll.setWidgetResizable(True)
+        self.single_scroll.setFrameShape(QFrame.NoFrame)
+        self.single_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.single_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+
+        self.single_container = QWidget()
+        self.single_lines_layout = QVBoxLayout(self.single_container)
+        self.single_lines_layout.setContentsMargins(2, 2, 2, 2)
+        self.single_lines_layout.setSpacing(8)
+        self.single_url_inputs: list[QLineEdit] = []
+        self._append_single_input_row()
+
+        self.single_scroll.setWidget(self.single_container)
+        single_layout.addWidget(self.single_scroll, 1)
+
+        batch_tab = QWidget()
+        batch_layout = QVBoxLayout(batch_tab)
+        batch_layout.setContentsMargins(6, 8, 6, 6)
+        batch_layout.setSpacing(8)
+
+        batch_hint = QLabel("批量文本：支持多行，也支持一行用 | 分隔多个链接")
+        batch_hint.setObjectName("subtitleLabel")
         self.url_input = QTextEdit()
         self.url_input.setObjectName("urlInput")
         self.url_input.setPlaceholderText(
             "示例:\n"
-            "episode_01|https://example.com/1.m3u8\n"
-            "episode_02|https://example.com/2.m3u8\n"
-            "https://example.com/3.m3u8"
+            "https://example.com/1.m3u8\n"
+            "https://example.com/2.m3u8\n"
+            "https://example.com/3.m3u8\n"
+            "\n或一行：\n"
+            "https://a.m3u8|https://b.m3u8|https://c.m3u8"
         )
-        self.url_input.setMinimumHeight(170)
+        self.url_input.setMinimumHeight(140)
+        batch_layout.addWidget(batch_hint)
+        batch_layout.addWidget(self.url_input, 1)
+
+        self.input_tabs.addTab(single_tab, "逐条输入")
+        self.input_tabs.addTab(batch_tab, "批量文本")
 
         input_layout.addWidget(input_title)
-        input_layout.addWidget(self.url_input)
+        input_layout.addWidget(self.input_tabs)
         right_layout.addWidget(input_card)
 
         action_row = QHBoxLayout()
@@ -1057,8 +1199,8 @@ class MainWindow(QMainWindow):
         header_view.setSectionResizeMode(3, QHeaderView.ResizeToContents)
         header_view.setSectionResizeMode(4, QHeaderView.Interactive)
         header_view.setSectionResizeMode(5, QHeaderView.Interactive)
-        self.table.setColumnWidth(4, 280)
-        self.table.setColumnWidth(5, 180)
+        self.table.setColumnWidth(4, 230)
+        self.table.setColumnWidth(5, 200)
 
         table_layout.addLayout(table_head)
         table_layout.addWidget(self.table)
@@ -1245,6 +1387,7 @@ class MainWindow(QMainWindow):
                     border: 1px solid rgba(255, 255, 255, 0.24);
                     background: rgba(255, 255, 255, 0.10);
                     color: #EFE6FF;
+                    font-size: 15px;
                     font-weight: 700;
                     padding: 7px 10px;
                     text-align: left;
@@ -1283,7 +1426,23 @@ class MainWindow(QMainWindow):
                     font-size: 14px;
                     font-weight: 600;
                 }
-                QTextEdit#urlInput, QLineEdit#pathInput, QSpinBox#spinBox {
+                QTabWidget#inputTabs::pane {
+                    border: 1px solid rgba(255, 255, 255, 0.20);
+                    border-radius: 10px;
+                    top: -1px;
+                }
+                QTabWidget#inputTabs QTabBar::tab {
+                    background: rgba(255, 255, 255, 0.10);
+                    color: #EFE6FF;
+                    padding: 7px 12px;
+                    border-top-left-radius: 8px;
+                    border-top-right-radius: 8px;
+                    margin-right: 6px;
+                }
+                QTabWidget#inputTabs QTabBar::tab:selected {
+                    background: rgba(156, 108, 255, 0.60);
+                }
+                QTextEdit#urlInput, QLineEdit#pathInput, QLineEdit#urlLineInput, QSpinBox#spinBox {
                     border: 1px solid rgba(255, 255, 255, 0.24);
                     border-radius: 10px;
                     background: rgba(255, 255, 255, 0.10);
@@ -1459,6 +1618,7 @@ class MainWindow(QMainWindow):
                     border: 1px solid #CFD5E3;
                     background: #F8F9FC;
                     color: #2A3346;
+                    font-size: 15px;
                     font-weight: 700;
                     padding: 7px 10px;
                     text-align: left;
@@ -1497,7 +1657,23 @@ class MainWindow(QMainWindow):
                     font-size: 14px;
                     font-weight: 600;
                 }
-                QTextEdit#urlInput, QLineEdit#pathInput, QSpinBox#spinBox {
+                QTabWidget#inputTabs::pane {
+                    border: 1px solid #D9DFEC;
+                    border-radius: 10px;
+                    top: -1px;
+                }
+                QTabWidget#inputTabs QTabBar::tab {
+                    background: #F3F6FC;
+                    color: #2A3346;
+                    padding: 7px 12px;
+                    border-top-left-radius: 8px;
+                    border-top-right-radius: 8px;
+                    margin-right: 6px;
+                }
+                QTabWidget#inputTabs QTabBar::tab:selected {
+                    background: #E5ECFA;
+                }
+                QTextEdit#urlInput, QLineEdit#pathInput, QLineEdit#urlLineInput, QSpinBox#spinBox {
                     border: 1px solid #CFD5E3;
                     border-radius: 10px;
                     background: #FFFFFF;
@@ -1731,12 +1907,53 @@ class MainWindow(QMainWindow):
         anim.valueChanged.connect(lambda v, b=bar: b.setFormat(f"{int(v)}%"))
         anim.start(QPropertyAnimation.DeleteWhenStopped)
 
+    def _append_single_input_row(self, text: str = "") -> None:
+        line = QLineEdit(text)
+        line.setObjectName("urlLineInput")
+        line.setPlaceholderText("https://example.com/video.m3u8")
+        line.textChanged.connect(lambda _=None, l=line: self._on_single_input_changed(l))
+        self.single_lines_layout.addWidget(line)
+        self.single_url_inputs.append(line)
+
+    def _remove_single_input_row(self, line: QLineEdit) -> None:
+        self.single_lines_layout.removeWidget(line)
+        if line in self.single_url_inputs:
+            self.single_url_inputs.remove(line)
+        line.deleteLater()
+
+    def _on_single_input_changed(self, line: QLineEdit) -> None:
+        if self.single_url_inputs and line is self.single_url_inputs[-1] and line.text().strip():
+            self._append_single_input_row()
+
+        while (
+            len(self.single_url_inputs) >= 2
+            and not self.single_url_inputs[-1].text().strip()
+            and not self.single_url_inputs[-2].text().strip()
+        ):
+            self._remove_single_input_row(self.single_url_inputs[-1])
+
+    def _collect_current_entries(self) -> list[tuple[str | None, str]]:
+        if self.input_tabs.currentIndex() == 0:
+            entries: list[tuple[str | None, str]] = []
+            for line in self.single_url_inputs:
+                text = line.text().strip()
+                if not text:
+                    continue
+                entries.extend(parse_url_lines(text))
+            return entries
+        return parse_url_lines(self.url_input.toPlainText())
+
     def _set_pause_btn_state(self, task_index: int, paused: bool, enabled: bool = True) -> None:
         btn = self.pause_btn_by_index.get(task_index)
         if not btn:
             return
         btn.setText("继续" if paused else "暂停")
         btn.setEnabled(enabled)
+
+    def _set_pause_btn_visible(self, task_index: int, visible: bool) -> None:
+        btn = self.pause_btn_by_index.get(task_index)
+        if btn:
+            btn.setVisible(visible)
 
     def _set_delete_btn_enabled(self, task_index: int, enabled: bool) -> None:
         btn = self.delete_btn_by_index.get(task_index)
@@ -1822,7 +2039,7 @@ class MainWindow(QMainWindow):
             self.summary_label.setText("任务列表已清空")
 
     def _prepare_tasks(self) -> tuple[list[DownloadTask], DownloadOptions, int, Path] | None:
-        raw_entries = parse_url_lines(self.url_input.toPlainText())
+        raw_entries = self._collect_current_entries()
         if not raw_entries:
             QMessageBox.warning(self, "提示", "请输入至少一个 m3u8 链接。")
             return None
@@ -1862,7 +2079,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "提示", "当前没有运行中的任务，请使用“开始下载”。")
             return
 
-        raw_entries = parse_url_lines(self.url_input.toPlainText())
+        raw_entries = self._collect_current_entries()
         if not raw_entries:
             QMessageBox.warning(self, "提示", "请输入要继续添加的链接。")
             return
@@ -1969,6 +2186,7 @@ class MainWindow(QMainWindow):
             if detail_item:
                 detail_item.setText(detail)
             self._set_pause_btn_state(task_index, paused=False)
+            self._set_pause_btn_visible(task_index, True)
             return
 
         if status == "progress" and bar:
@@ -1986,6 +2204,7 @@ class MainWindow(QMainWindow):
         if status == "running":
             self._set_status(row, "准备中", QColor("#3E63DD") if self.current_theme == "light" else QColor("#A7C5FF"))
             self._set_pause_btn_state(task_index, paused=False)
+            self._set_pause_btn_visible(task_index, True)
             self._set_delete_btn_enabled(task_index, True)
             if detail_item:
                 detail_item.setText(detail)
@@ -1994,6 +2213,7 @@ class MainWindow(QMainWindow):
         if status == "ok":
             self._set_status(row, "已完成", QColor("#1F8F4D") if self.current_theme == "light" else QColor("#86E3A8"))
             self._set_pause_btn_state(task_index, paused=False, enabled=False)
+            self._set_pause_btn_visible(task_index, False)
             self._set_delete_btn_enabled(task_index, False)
             if bar:
                 if bar.maximum() == 0:
@@ -2007,6 +2227,7 @@ class MainWindow(QMainWindow):
         if status == "skipped":
             self._set_status(row, "已跳过", QColor("#AD6E00") if self.current_theme == "light" else QColor("#FFD287"))
             self._set_pause_btn_state(task_index, paused=False, enabled=False)
+            self._set_pause_btn_visible(task_index, False)
             self._set_delete_btn_enabled(task_index, False)
             if bar:
                 bar.setRange(0, 100)
@@ -2019,6 +2240,7 @@ class MainWindow(QMainWindow):
         if status == "paused":
             self._set_status(row, "已暂停", QColor("#A37200") if self.current_theme == "light" else QColor("#FFD287"))
             self._set_pause_btn_state(task_index, paused=True)
+            self._set_pause_btn_visible(task_index, True)
             if bar and bar.maximum() == 0:
                 bar.setRange(0, 100)
                 bar.setValue(0)
@@ -2030,6 +2252,7 @@ class MainWindow(QMainWindow):
         if status == "deleted":
             self._set_status(row, "已删除", QColor("#C62828") if self.current_theme == "light" else QColor("#FF9A9A"))
             self._set_pause_btn_state(task_index, paused=False, enabled=False)
+            self._set_pause_btn_visible(task_index, False)
             self._set_delete_btn_enabled(task_index, False)
             if bar:
                 bar.setRange(0, 100)
@@ -2042,6 +2265,7 @@ class MainWindow(QMainWindow):
         if status == "failed":
             self._set_status(row, "下载失败", QColor("#C62828") if self.current_theme == "light" else QColor("#FF9A9A"))
             self._set_pause_btn_state(task_index, paused=False, enabled=False)
+            self._set_pause_btn_visible(task_index, False)
             self._set_delete_btn_enabled(task_index, False)
             if bar:
                 bar.setRange(0, 100)
