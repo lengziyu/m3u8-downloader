@@ -42,6 +42,11 @@ def add_binary_args(binary_path: str) -> list[str]:
     return ["--add-binary", f"{binary_path}{sep}."]
 
 
+def add_data_args(path: Path) -> list[str]:
+    sep = ";" if os.name == "nt" else ":"
+    return ["--add-data", f"{path}{sep}."]
+
+
 def _resolve_real_windows_ffmpeg_binary(binary_path: str, binary_name: str) -> str:
     path = Path(binary_path)
     lower = str(path).lower().replace("/", "\\")
@@ -137,6 +142,10 @@ def build_app(
         if ffprobe:
             cmd.extend(add_binary_args(ffprobe))
             bundled_items.append(f"ffprobe={ffprobe}")
+
+    version_file = ROOT / "VERSION"
+    if version_file.exists():
+        cmd.extend(add_data_args(version_file))
 
     cmd.append("m3u8_gui.py")
 

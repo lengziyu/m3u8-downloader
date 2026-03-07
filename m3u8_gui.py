@@ -18,6 +18,7 @@ import urllib.request
 import webbrowser
 from collections import deque
 from dataclasses import dataclass
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Callable
 from urllib.parse import unquote, urlparse
@@ -28,6 +29,7 @@ from PySide6.QtCore import (
     QParallelAnimationGroup,
     QPropertyAnimation,
     QRectF,
+    QStandardPaths,
     Qt,
     QThread,
     Signal,
@@ -36,6 +38,7 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QBrush, QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
+    QComboBox,
     QFileDialog,
     QFrame,
     QGraphicsDropShadowEffect,
@@ -65,6 +68,10 @@ DEFAULT_USER_AGENT = (
 )
 APP_DISPLAY_NAME = "M3U8-Downloader"
 GITHUB_REPO = os.environ.get("M3U8_DOWNLOADER_GITHUB_REPO", "lengziyu/m3u8-downloader")
+DEFAULT_APP_VERSION = "1.0.8"
+LOCAL_API_HOST = "127.0.0.1"
+LOCAL_API_PORT = 38427
+_FFMPEG_OPTION_SUPPORT_CACHE: dict[tuple[str, str], bool] = {}
 
 
 def normalize_version_text(text: str) -> str:
@@ -74,26 +81,52 @@ def normalize_version_text(text: str) -> str:
     return value or "1.0.0"
 
 
+def _candidate_version_files() -> list[Path]:
+    candidates: list[Path] = []
+    seen: set[str] = set()
+
+    def push(path: Path) -> None:
+        key = str(path)
+        if key not in seen:
+            seen.add(key)
+            candidates.append(path)
+
+    source_root = Path(__file__).resolve().parent
+    push(source_root / "VERSION")
+    push(Path.cwd() / "VERSION")
+
+    exe_root = Path(sys.executable).resolve().parent
+    push(exe_root / "VERSION")
+    push(exe_root.parent / "Resources" / "VERSION")
+
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        push(Path(meipass) / "VERSION")
+
+    return candidates
+
+
 def read_local_version_file() -> str | None:
-    version_file = Path(__file__).resolve().parent / "VERSION"
-    if not version_file.exists():
-        return None
-    try:
-        for line in version_file.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if line:
-                return normalize_version_text(line)
-    except Exception:
-        return None
+    for version_file in _candidate_version_files():
+        if not version_file.exists():
+            continue
+        try:
+            for line in version_file.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if line:
+                    return normalize_version_text(line)
+        except Exception:
+            continue
     return None
 
 
 APP_VERSION = normalize_version_text(
-    os.environ.get("M3U8_DOWNLOADER_APP_VERSION", "") or (read_local_version_file() or "1.0.0")
+    os.environ.get("M3U8_DOWNLOADER_APP_VERSION", "")
+    or (read_local_version_file() or DEFAULT_APP_VERSION)
 )
 
 LANG_ORDER = ["zh", "en", "ja"]
-LANG_LABEL = {"zh": "中", "en": "EN", "ja": "日"}
+LANG_LABEL = {"zh": "中文", "en": "English", "ja": "日本語"}
 I18N = {
     "zh": {
         "settings_toggle": "⚙ 设置",
@@ -382,6 +415,10 @@ class DownloadTask:
     index: int
     url: str
     output_path: Path
+    referer: str | None = None
+    headers: tuple[str, ...] = ()
+    user_agent: str | None = None
+    source_page_url: str | None = None
 
 
 @dataclass(frozen=True)
@@ -516,6 +553,37 @@ def build_tasks(
         local_used.add(final.lower())
         tasks.append(DownloadTask(index=idx, url=url, output_path=output_dir / final))
     return tasks
+
+
+def build_task(
+    *,
+    index: int,
+    url: str,
+    output_dir: Path,
+    used_names: set[str],
+    custom_name: str | None = None,
+    referer: str | None = None,
+    headers: list[str] | tuple[str, ...] | None = None,
+    user_agent: str | None = None,
+    source_page_url: str | None = None,
+) -> DownloadTask:
+    candidate = build_output_name(index, url, custom_name)
+    stem = Path(candidate).stem
+    final = candidate
+    suffix = 1
+    while final.lower() in used_names:
+        final = f"{stem}_{suffix}.mp4"
+        suffix += 1
+    used_names.add(final.lower())
+    return DownloadTask(
+        index=index,
+        url=url,
+        output_path=output_dir / final,
+        referer=(referer or "").strip() or None,
+        headers=tuple(h for h in (headers or []) if h),
+        user_agent=(user_agent or "").strip() or None,
+        source_page_url=(source_page_url or "").strip() or None,
+    )
 
 
 def parse_version(value: str) -> tuple[int, ...]:
@@ -692,13 +760,97 @@ def header_args(user_agent: str | None, referer: str | None, headers: list[str])
     return args
 
 
-def hls_input_args() -> list[str]:
-    return [
+def ffmpeg_supports_option(binary_path: str | None, option_name: str) -> bool:
+    if not binary_path:
+        return False
+    cache_key = (binary_path, option_name)
+    cached = _FFMPEG_OPTION_SUPPORT_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    try:
+        proc = subprocess.run(
+            [binary_path, "-hide_banner", "-h", "full"],
+            capture_output=True,
+            text=True,
+            timeout=8,
+            **subprocess_no_window_kwargs(),
+        )
+        output = f"{proc.stdout}\n{proc.stderr}"
+        supported = proc.returncode == 0 and option_name in output
+    except Exception:
+        supported = False
+
+    _FFMPEG_OPTION_SUPPORT_CACHE[cache_key] = supported
+    return supported
+
+
+def task_header_args(task: DownloadTask, options: DownloadOptions) -> list[str]:
+    merged_headers = list(options.headers)
+    for header in task.headers:
+        if header not in merged_headers:
+            merged_headers.append(header)
+    return header_args(task.user_agent or options.user_agent, task.referer or options.referer, merged_headers)
+
+
+def normalize_header_lines(raw_headers: object) -> list[str]:
+    lines: list[str] = []
+    if isinstance(raw_headers, dict):
+        for key, value in raw_headers.items():
+            if key is None or value is None:
+                continue
+            name = str(key).strip()
+            val = str(value).strip()
+            if name and val:
+                lines.append(f"{name}: {val}")
+        return lines
+
+    if isinstance(raw_headers, list):
+        for item in raw_headers:
+            if isinstance(item, str):
+                text = item.strip()
+                if text:
+                    lines.append(text)
+            elif isinstance(item, dict):
+                key = str(item.get("name") or item.get("key") or "").strip()
+                val = str(item.get("value") or "").strip()
+                if key and val:
+                    lines.append(f"{key}: {val}")
+        return lines
+
+    if isinstance(raw_headers, str):
+        for line in raw_headers.splitlines():
+            text = line.strip()
+            if text:
+                lines.append(text)
+    return lines
+
+
+def build_external_filename_hint(payload: dict[str, object]) -> str | None:
+    hint = str(payload.get("filename_hint") or payload.get("name") or "").strip()
+    if hint:
+        return hint
+
+    title = str(payload.get("title") or "").strip()
+    if title:
+        return title
+    return None
+
+
+def default_download_dir() -> Path:
+    locations = QStandardPaths.standardLocations(QStandardPaths.DownloadLocation)
+    if locations:
+        base = Path(locations[0]).expanduser()
+    else:
+        base = Path.home() / "Downloads"
+    return (base / APP_DISPLAY_NAME).resolve()
+
+
+def hls_input_args(binary_path: str | None = None) -> list[str]:
+    args = [
         "-protocol_whitelist",
         "file,http,https,tcp,tls,crypto,data",
         "-allowed_extensions",
-        "ALL",
-        "-allowed_segment_extensions",
         "ALL",
         "-extension_picky",
         "0",
@@ -709,6 +861,9 @@ def hls_input_args() -> list[str]:
         "-reconnect_delay_max",
         "8",
     ]
+    if ffmpeg_supports_option(binary_path, "allowed_segment_extensions"):
+        args[4:4] = ["-allowed_segment_extensions", "ALL"]
+    return args
 
 
 def subprocess_no_window_kwargs() -> dict[str, object]:
@@ -722,7 +877,7 @@ def subprocess_no_window_kwargs() -> dict[str, object]:
     return {"startupinfo": startupinfo}
 
 
-def probe_duration_seconds(url: str, options: DownloadOptions) -> float | None:
+def probe_duration_seconds(task: DownloadTask, options: DownloadOptions) -> float | None:
     if not options.ffprobe:
         return None
 
@@ -730,13 +885,13 @@ def probe_duration_seconds(url: str, options: DownloadOptions) -> float | None:
         options.ffprobe,
         "-v",
         "error",
-        *hls_input_args(),
-        *header_args(options.user_agent, options.referer, options.headers),
+        *hls_input_args(options.ffprobe),
+        *task_header_args(task, options),
         "-show_entries",
         "format=duration",
         "-of",
         "default=noprint_wrappers=1:nokey=1",
-        url,
+        task.url,
     ]
     try:
         proc = subprocess.run(
@@ -782,8 +937,8 @@ def run_ffmpeg_with_progress(
     if options.timeout > 0:
         cmd.extend(["-rw_timeout", str(options.timeout * 1_000_000)])
 
-    cmd.extend(hls_input_args())
-    cmd.extend(header_args(options.user_agent, options.referer, options.headers))
+    cmd.extend(hls_input_args(options.ffmpeg))
+    cmd.extend(task_header_args(task, options))
     cmd.extend(["-i", task.url])
     cmd.extend(codec_args)
     cmd.append(str(task.output_path))
@@ -948,7 +1103,7 @@ def download_single_task(
     if task.output_path.exists() and not options.overwrite:
         return "skipped", "目标文件已存在"
 
-    duration = probe_duration_seconds(task.url, options)
+    duration = probe_duration_seconds(task, options)
 
     def cleanup_partial_output() -> None:
         try:
@@ -1307,8 +1462,134 @@ class BatchWorker(QObject):
         self.batch_done.emit(success, skipped + deleted, failed, failure_file)
 
 
+@dataclass
+class LocalApiRequest:
+    path: str
+    payload: object
+    event: threading.Event
+    response: dict[str, object] | None = None
+
+
+class LocalApiHTTPServer(ThreadingHTTPServer):
+    daemon_threads = True
+    allow_reuse_address = True
+
+    def __init__(
+        self,
+        server_address: tuple[str, int],
+        request_callback: Callable[[str, object], dict[str, object]],
+    ) -> None:
+        super().__init__(server_address, LocalApiRequestHandler)
+        self.request_callback = request_callback
+
+
+class LocalApiRequestHandler(BaseHTTPRequestHandler):
+    server_version = "M3U8DownloaderLocalAPI/1.0"
+
+    def log_message(self, format: str, *args: object) -> None:
+        return
+
+    def _send_json(self, status: int, payload: dict[str, object]) -> None:
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(body)
+
+    def _read_json_body(self) -> object:
+        length = int(self.headers.get("Content-Length", "0") or "0")
+        if length <= 0:
+            return {}
+        raw = self.rfile.read(length)
+        if not raw:
+            return {}
+        return json.loads(raw.decode("utf-8"))
+
+    def do_OPTIONS(self) -> None:
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.end_headers()
+
+    def do_GET(self) -> None:
+        if self.path != "/ping":
+            self._send_json(404, {"ok": False, "error": "not_found"})
+            return
+        callback = getattr(self.server, "request_callback", None)
+        if not callable(callback):
+            self._send_json(500, {"ok": False, "error": "callback_missing"})
+            return
+        self._send_json(200, callback(self.path, {}))
+
+    def do_POST(self) -> None:
+        if self.path not in {"/add-task", "/add-tasks", "/open-window"}:
+            self._send_json(404, {"ok": False, "error": "not_found"})
+            return
+
+        try:
+            payload = self._read_json_body()
+        except json.JSONDecodeError:
+            self._send_json(400, {"ok": False, "error": "invalid_json"})
+            return
+        except Exception as exc:
+            self._send_json(400, {"ok": False, "error": str(exc)})
+            return
+
+        callback = getattr(self.server, "request_callback", None)
+        if not callable(callback):
+            self._send_json(500, {"ok": False, "error": "callback_missing"})
+            return
+
+        try:
+            result = callback(self.path, payload)
+        except Exception as exc:
+            self._send_json(500, {"ok": False, "error": str(exc)})
+            return
+
+        status = 200
+        if isinstance(result, dict):
+            status = int(result.pop("_http_status", 200))
+        self._send_json(status, result if isinstance(result, dict) else {"ok": True})
+
+
+class LocalApiServer:
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        request_callback: Callable[[str, object], dict[str, object]],
+    ) -> None:
+        self.host = host
+        self.port = port
+        self.request_callback = request_callback
+        self.httpd: LocalApiHTTPServer | None = None
+        self.thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        if self.httpd:
+            return
+        self.httpd = LocalApiHTTPServer((self.host, self.port), self.request_callback)
+        self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
+        self.thread.start()
+
+    def stop(self) -> None:
+        if not self.httpd:
+            return
+        self.httpd.shutdown()
+        self.httpd.server_close()
+        self.httpd = None
+        self.thread = None
+
+
 class MainWindow(QMainWindow):
     update_check_done = Signal(str, str, str)
+    local_api_request = Signal(object)
 
     def __init__(self):
         super().__init__()
@@ -1328,14 +1609,20 @@ class MainWindow(QMainWindow):
         self.delete_btn_by_index: dict[int, QPushButton] = {}
         self.task_status_by_index: dict[int, str] = {}
         self.task_url_by_index: dict[int, str] = {}
+        self.resume_progress_floor_by_index: dict[int, int] = {}
+        self.single_delete_btns: dict[QLineEdit, QPushButton] = {}
         self.pause_all_active = False
         self.update_checking = False
+        self.local_api_server: LocalApiServer | None = None
+        self.local_api_error: str | None = None
 
         self._build_ui()
         self.update_check_done.connect(self._on_update_check_done)
+        self.local_api_request.connect(self._handle_local_api_request)
         self._apply_theme(self.current_theme)
         self._refresh_i18n_texts()
         self._animate_window_enter()
+        self._start_local_api_server()
 
     def t(self, key: str, **kwargs: object) -> str:
         lang_pack = I18N.get(self.current_lang, I18N["zh"])
@@ -1344,6 +1631,283 @@ class MainWindow(QMainWindow):
             return template.format(**kwargs)
         except Exception:
             return template
+
+    def _start_local_api_server(self) -> None:
+        try:
+            self.local_api_server = LocalApiServer(
+                LOCAL_API_HOST,
+                LOCAL_API_PORT,
+                self._dispatch_local_api_request,
+            )
+            self.local_api_server.start()
+            self.local_api_error = None
+        except Exception as exc:
+            self.local_api_server = None
+            self.local_api_error = str(exc)
+
+    def _dispatch_local_api_request(self, path: str, payload: object) -> dict[str, object]:
+        if path == "/ping":
+            running = bool(self.worker and self.worker_thread and self.worker_thread.isRunning())
+            return {
+                "ok": True,
+                "app": APP_DISPLAY_NAME,
+                "version": APP_VERSION,
+                "api_host": LOCAL_API_HOST,
+                "api_port": LOCAL_API_PORT,
+                "running": running,
+                "task_count": self.table.rowCount(),
+            }
+
+        request = LocalApiRequest(path=path, payload=payload, event=threading.Event())
+        self.local_api_request.emit(request)
+        if not request.event.wait(timeout=10):
+            return {"ok": False, "error": "client_timeout"}
+        return request.response or {"ok": False, "error": "empty_response"}
+
+    def _resolve_output_dir(self) -> Path:
+        out_dir_text = self.output_dir_input.text().strip()
+        if not out_dir_text:
+            raise ValueError(self.t("tip_need_dir"))
+        output_dir = Path(out_dir_text).expanduser().resolve()
+        output_dir.mkdir(parents=True, exist_ok=True)
+        return output_dir
+
+    def _build_default_options(self) -> DownloadOptions:
+        ffmpeg = check_ffmpeg_bin("ffmpeg")
+        return DownloadOptions(
+            ffmpeg=ffmpeg,
+            ffprobe=resolve_ffprobe_bin(),
+            retries=self.retries_input.value(),
+            overwrite=False,
+            timeout=30,
+            user_agent=None,
+            referer=None,
+            headers=[],
+            transcode_on_fail=True,
+            validate_after_copy=False,
+        )
+
+    def _focus_main_window(self) -> str:
+        action = "focused"
+        if not self.isVisible():
+            self.show()
+            action = "opened"
+        elif self.isMinimized():
+            self.showNormal()
+            action = "opened"
+
+        state = self.windowState()
+        if state & Qt.WindowMinimized:
+            self.setWindowState((state & ~Qt.WindowMinimized) | Qt.WindowActive)
+            action = "opened"
+
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+        app = QApplication.instance()
+        if app is not None:
+            app.processEvents()
+
+        return action
+
+    def _current_used_output_names(self) -> set[str]:
+        return {
+            self.table.item(r, 1).text().strip().lower()
+            for r in range(self.table.rowCount())
+            if self.table.item(r, 1)
+        }
+
+    def _next_task_index(self) -> int:
+        return (max(self.row_by_index.keys()) + 1) if self.row_by_index else 1
+
+    def _start_worker_session(
+        self,
+        tasks: list[DownloadTask],
+        options: DownloadOptions,
+        jobs: int,
+        output_dir: Path,
+        *,
+        clear_existing: bool,
+    ) -> None:
+        if not tasks:
+            return
+
+        if clear_existing:
+            self._clear_table_ui()
+
+        self.pause_all_active = False
+        self.pause_all_btn.setText(self.t("pause_all"))
+        self.pause_all_btn.setEnabled(True)
+        self.clear_tasks_btn.setEnabled(True)
+
+        for task in tasks:
+            self._add_table_row(task)
+
+        self.summary_label.setText(self.t("summary_preparing", count=len(tasks)))
+        self.start_btn.setEnabled(False)
+        self.add_more_btn.setEnabled(True)
+
+        self.worker = BatchWorker(tasks, options, jobs, output_dir)
+        self.worker_thread = QThread(self)
+        self.worker.moveToThread(self.worker_thread)
+
+        self.worker_thread.started.connect(self.worker.run)
+        self.worker.task_update.connect(self._on_task_update)
+        self.worker.batch_done.connect(self._on_batch_done)
+        self.worker.batch_done.connect(self.worker_thread.quit)
+        self.worker_thread.finished.connect(self._on_worker_finished)
+        self.worker_thread.finished.connect(self.worker.deleteLater)
+        self.worker_thread.finished.connect(self.worker_thread.deleteLater)
+
+        self.worker_thread.start()
+
+    def _append_tasks_to_active_worker(self, tasks: list[DownloadTask]) -> int:
+        if not tasks or not self.worker:
+            return 0
+        for task in tasks:
+            self._add_table_row(task)
+        added = self.worker.enqueue_tasks(tasks)
+        if added > 0:
+            self.pause_all_btn.setEnabled(True)
+            self.add_more_btn.setEnabled(True)
+            self.summary_label.setText(self.t("summary_added", count=added))
+        return added
+
+    def _build_tasks_from_api_payload(
+        self,
+        items: list[dict[str, object]],
+        output_dir: Path,
+        start_index: int,
+        used_names: set[str],
+    ) -> tuple[list[DownloadTask], int, int]:
+        tasks: list[DownloadTask] = []
+        duplicate_count = 0
+        invalid_count = 0
+        existing_urls = {u.strip() for u in self.task_url_by_index.values()}
+        next_index = start_index
+
+        for item in items:
+            url = str(item.get("m3u8_url") or item.get("url") or "").strip()
+            if not is_probable_url(url):
+                invalid_count += 1
+                continue
+            if url in existing_urls:
+                duplicate_count += 1
+                continue
+
+            task = build_task(
+                index=next_index,
+                url=url,
+                output_dir=output_dir,
+                used_names=used_names,
+                custom_name=build_external_filename_hint(item),
+                referer=str(item.get("referer") or item.get("page_url") or "").strip() or None,
+                headers=normalize_header_lines(item.get("headers")),
+                user_agent=str(item.get("user_agent") or item.get("ua") or "").strip() or None,
+                source_page_url=str(item.get("page_url") or "").strip() or None,
+            )
+            tasks.append(task)
+            existing_urls.add(url)
+            next_index += 1
+
+        return tasks, duplicate_count, invalid_count
+
+    def _normalize_api_payload_items(self, path: str, payload: object) -> list[dict[str, object]]:
+        if path == "/add-task":
+            if not isinstance(payload, dict):
+                raise ValueError("payload must be an object")
+            return [payload]
+
+        if isinstance(payload, list):
+            return [item for item in payload if isinstance(item, dict)]
+
+        if isinstance(payload, dict):
+            tasks = payload.get("tasks")
+            if isinstance(tasks, list):
+                return [item for item in tasks if isinstance(item, dict)]
+        raise ValueError("payload must contain tasks")
+
+    @Slot(object)
+    def _handle_local_api_request(self, request: object) -> None:
+        if not isinstance(request, LocalApiRequest):
+            return
+
+        try:
+            if request.path == "/open-window":
+                action = self._focus_main_window()
+                request.response = {
+                    "ok": True,
+                    "action": action,
+                }
+                return
+
+            items = self._normalize_api_payload_items(request.path, request.payload)
+            if not items:
+                request.response = {
+                    "ok": False,
+                    "error": "empty_tasks",
+                    "_http_status": 400,
+                }
+            else:
+                if self.worker and self.worker_thread and self.worker_thread.isRunning():
+                    output_dir = self.worker.output_dir
+                    jobs = self.worker.jobs
+                    options = self.worker.options
+                    running = True
+                else:
+                    output_dir = self._resolve_output_dir()
+                    jobs = self.jobs_input.value()
+                    options = self._build_default_options()
+                    running = False
+
+                tasks, duplicate_count, invalid_count = self._build_tasks_from_api_payload(
+                    items,
+                    output_dir=output_dir,
+                    start_index=self._next_task_index(),
+                    used_names=self._current_used_output_names(),
+                )
+
+                if not tasks:
+                    request.response = {
+                        "ok": False,
+                        "error": "no_valid_tasks",
+                        "duplicate_count": duplicate_count,
+                        "invalid_count": invalid_count,
+                        "_http_status": 400,
+                    }
+                else:
+                    if running:
+                        added_count = self._append_tasks_to_active_worker(tasks)
+                    else:
+                        self._start_worker_session(
+                            tasks,
+                            options,
+                            jobs,
+                            output_dir,
+                            clear_existing=False,
+                        )
+                        added_count = len(tasks)
+
+                    if request.path == "/add-task":
+                        request.response = {
+                            "ok": True,
+                            "task_id": str(tasks[0].index),
+                            "message": "Task added",
+                        }
+                    else:
+                        request.response = {
+                            "ok": True,
+                            "task_ids": [str(task.index) for task in tasks],
+                            "added_count": added_count,
+                            "message": "Tasks added",
+                        }
+        except ValueError as exc:
+            request.response = {"ok": False, "error": str(exc), "_http_status": 400}
+        except Exception as exc:
+            request.response = {"ok": False, "error": str(exc), "_http_status": 500}
+        finally:
+            request.event.set()
 
     def _build_ui(self) -> None:
         root = QWidget(self)
@@ -1380,7 +1944,7 @@ class MainWindow(QMainWindow):
 
         self.output_label = QLabel("")
         self.output_label.setObjectName("fieldLabel")
-        self.output_dir_input = QLineEdit(str((Path.cwd() / "downloads").resolve()))
+        self.output_dir_input = QLineEdit(str(default_download_dir()))
         self.output_dir_input.setObjectName("pathInput")
         self.browse_btn = QPushButton("")
         self.browse_btn.setObjectName("secondaryBtn")
@@ -1486,10 +2050,13 @@ class MainWindow(QMainWindow):
         self.title_label.setObjectName("titleLabel")
         self.subtitle_label = QLabel("")
         self.subtitle_label.setObjectName("subtitleLabel")
-        self.lang_btn = QPushButton("")
-        self.lang_btn.setObjectName("themeIconBtn")
-        self.lang_btn.setFixedSize(38, 38)
-        self.lang_btn.clicked.connect(self._toggle_language)
+        self.lang_select = QComboBox()
+        self.lang_select.setObjectName("langSelect")
+        self.lang_select.setFixedHeight(38)
+        self.lang_select.setMinimumWidth(112)
+        for code in LANG_ORDER:
+            self.lang_select.addItem(LANG_LABEL.get(code, code), code)
+        self.lang_select.currentIndexChanged.connect(self._on_language_changed)
         self.theme_btn = QPushButton("◐")
         self.theme_btn.setObjectName("themeIconBtn")
         self.theme_btn.setFixedSize(38, 38)
@@ -1498,7 +2065,7 @@ class MainWindow(QMainWindow):
         header_layout.addWidget(self.title_label, 0, Qt.AlignVCenter)
         header_layout.addWidget(self.subtitle_label, 0, Qt.AlignVCenter)
         header_layout.addStretch(1)
-        header_layout.addWidget(self.lang_btn, 0, Qt.AlignRight | Qt.AlignVCenter)
+        header_layout.addWidget(self.lang_select, 0, Qt.AlignRight | Qt.AlignVCenter)
         header_layout.addWidget(self.theme_btn, 0, Qt.AlignRight | Qt.AlignVCenter)
 
         right_layout.addWidget(header)
@@ -1526,12 +2093,7 @@ class MainWindow(QMainWindow):
         single_hint_row.setSpacing(8)
         self.single_hint_label = QLabel("")
         self.single_hint_label.setObjectName("inputHintLabel")
-        self.single_remove_btn = QPushButton("")
-        self.single_remove_btn.setObjectName("miniBtn")
-        self.single_remove_btn.setMinimumHeight(24)
-        self.single_remove_btn.clicked.connect(self._on_single_remove_clicked)
         single_hint_row.addWidget(self.single_hint_label, 1)
-        single_hint_row.addWidget(self.single_remove_btn, 0, Qt.AlignRight)
         single_layout.addLayout(single_hint_row)
 
         self.single_scroll = QScrollArea()
@@ -1680,9 +2242,11 @@ class MainWindow(QMainWindow):
     def _toggle_settings_panel(self) -> None:
         self._set_settings_panel_expanded(not self.settings_panel_expanded, animate=True)
 
-    def _toggle_language(self) -> None:
-        cur_idx = LANG_ORDER.index(self.current_lang) if self.current_lang in LANG_ORDER else 0
-        self.current_lang = LANG_ORDER[(cur_idx + 1) % len(LANG_ORDER)]
+    def _on_language_changed(self, index: int) -> None:
+        code = self.lang_select.itemData(index)
+        if not isinstance(code, str) or code == self.current_lang:
+            return
+        self.current_lang = code
         self._refresh_i18n_texts()
 
     def _refresh_i18n_texts(self) -> None:
@@ -1696,7 +2260,6 @@ class MainWindow(QMainWindow):
         self.input_title_label.setText(self.t("input_title"))
         self.single_hint_label.setText(self.t("single_hint"))
         self.batch_hint_label.setText(self.t("batch_hint"))
-        self.single_remove_btn.setText(self.t("single_remove"))
         self.batch_clear_btn.setText(self.t("batch_clear"))
         self.start_btn.setText(self.t("start"))
         self.add_more_btn.setText(self.t("add_more"))
@@ -1709,8 +2272,13 @@ class MainWindow(QMainWindow):
         self.url_input.setPlaceholderText(self.t("batch_placeholder"))
         for line in self.single_url_inputs:
             line.setPlaceholderText(self.t("single_placeholder"))
-        self.lang_btn.setText(LANG_LABEL.get(self.current_lang, "中"))
-        self.lang_btn.setToolTip(self.t("lang_tip"))
+        for delete_btn in self.single_delete_btns.values():
+            delete_btn.setText(self.t("row_delete"))
+        self.lang_select.blockSignals(True)
+        target_index = max(0, self.lang_select.findData(self.current_lang))
+        self.lang_select.setCurrentIndex(target_index)
+        self.lang_select.setToolTip(self.t("lang_tip"))
+        self.lang_select.blockSignals(False)
 
         self.table.setHorizontalHeaderLabels(
             [
@@ -2063,6 +2631,35 @@ class MainWindow(QMainWindow):
                 QPushButton#themeIconBtn:hover {
                     background: rgba(255, 255, 255, 0.28);
                 }
+                QComboBox#langSelect {
+                    border-radius: 12px;
+                    border: 1px solid rgba(255, 255, 255, 0.28);
+                    background: rgba(255, 255, 255, 0.18);
+                    color: #FFFFFF;
+                    padding: 0 30px 0 12px;
+                    font-size: 13px;
+                    font-weight: 650;
+                }
+                QComboBox#langSelect:hover {
+                    background: rgba(255, 255, 255, 0.28);
+                }
+                QComboBox#langSelect::drop-down {
+                    border: 0;
+                    width: 24px;
+                }
+                QComboBox#langSelect::down-arrow {
+                    image: none;
+                    width: 0;
+                    height: 0;
+                }
+                QComboBox#langSelect QAbstractItemView {
+                    border: 1px solid rgba(255, 255, 255, 0.20);
+                    background: #3C286D;
+                    color: #FFFFFF;
+                    selection-background-color: #8A5BFF;
+                    selection-color: #FFFFFF;
+                    outline: 0;
+                }
                 QPushButton#startBtn {
                     border-radius: 12px;
                     border: 0;
@@ -2318,6 +2915,35 @@ class MainWindow(QMainWindow):
                 QPushButton#themeIconBtn:hover {
                     background: #F3F6FC;
                 }
+                QComboBox#langSelect {
+                    border-radius: 12px;
+                    border: 1px solid #C7D0E2;
+                    background: #FFFFFF;
+                    color: #283347;
+                    padding: 0 30px 0 12px;
+                    font-size: 13px;
+                    font-weight: 650;
+                }
+                QComboBox#langSelect:hover {
+                    background: #F3F6FC;
+                }
+                QComboBox#langSelect::drop-down {
+                    border: 0;
+                    width: 24px;
+                }
+                QComboBox#langSelect::down-arrow {
+                    image: none;
+                    width: 0;
+                    height: 0;
+                }
+                QComboBox#langSelect QAbstractItemView {
+                    border: 1px solid #C7D0E2;
+                    background: #FFFFFF;
+                    color: #283347;
+                    selection-background-color: #8A5BFF;
+                    selection-color: #FFFFFF;
+                    outline: 0;
+                }
                 QPushButton#startBtn {
                     border-radius: 12px;
                     border: 0;
@@ -2511,18 +3137,37 @@ class MainWindow(QMainWindow):
         anim.start(QPropertyAnimation.DeleteWhenStopped)
 
     def _append_single_input_row(self, text: str = "") -> None:
+        row_wrap = QWidget()
+        row_layout = QHBoxLayout(row_wrap)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(8)
+
         line = QLineEdit(text)
         line.setObjectName("urlLineInput")
         line.setPlaceholderText(self.t("single_placeholder"))
         line.textChanged.connect(lambda _=None, l=line: self._on_single_input_changed(l))
-        self.single_lines_layout.addWidget(line)
+
+        delete_btn = QPushButton(self.t("row_delete"))
+        delete_btn.setObjectName("miniBtn")
+        delete_btn.setFixedSize(52, 32)
+        delete_btn.clicked.connect(lambda _, l=line: self._on_single_row_delete_clicked(l))
+
+        row_layout.addWidget(line, 1)
+        row_layout.addWidget(delete_btn, 0, Qt.AlignVCenter)
+        self.single_lines_layout.addWidget(row_wrap)
         self.single_url_inputs.append(line)
+        self.single_delete_btns[line] = delete_btn
 
     def _remove_single_input_row(self, line: QLineEdit) -> None:
-        self.single_lines_layout.removeWidget(line)
         if line in self.single_url_inputs:
             self.single_url_inputs.remove(line)
-        line.deleteLater()
+        self.single_delete_btns.pop(line, None)
+        row_wrap = line.parentWidget()
+        if row_wrap:
+            self.single_lines_layout.removeWidget(row_wrap)
+            row_wrap.deleteLater()
+        else:
+            line.deleteLater()
 
     def _on_single_input_changed(self, line: QLineEdit) -> None:
         if self.single_url_inputs and line is self.single_url_inputs[-1] and line.text().strip():
@@ -2535,18 +3180,13 @@ class MainWindow(QMainWindow):
         ):
             self._remove_single_input_row(self.single_url_inputs[-1])
 
-    def _on_single_remove_clicked(self) -> None:
-        if not self.single_url_inputs:
-            self._append_single_input_row()
+    def _on_single_row_delete_clicked(self, line: QLineEdit) -> None:
+        if line not in self.single_url_inputs:
             return
         if len(self.single_url_inputs) == 1:
-            self.single_url_inputs[0].clear()
+            line.clear()
             return
-        if not self.single_url_inputs[-1].text().strip():
-            target = self.single_url_inputs[-2]
-        else:
-            target = self.single_url_inputs[-1]
-        self._remove_single_input_row(target)
+        self._remove_single_input_row(line)
         if not self.single_url_inputs or self.single_url_inputs[-1].text().strip():
             self._append_single_input_row()
 
@@ -2578,6 +3218,14 @@ class MainWindow(QMainWindow):
         if btn:
             btn.setEnabled(enabled)
 
+    def _capture_resume_floor(self, task_index: int) -> None:
+        bar = self.progress_by_index.get(task_index)
+        if not bar or bar.maximum() == 0:
+            return
+        current = max(0, min(100, bar.value()))
+        if current > 0:
+            self.resume_progress_floor_by_index[task_index] = current
+
     def _remove_task_row(self, task_index: int) -> None:
         row = self.row_by_index.get(task_index)
         if row is None:
@@ -2589,6 +3237,7 @@ class MainWindow(QMainWindow):
         self.delete_btn_by_index.pop(task_index, None)
         self.task_status_by_index.pop(task_index, None)
         self.task_url_by_index.pop(task_index, None)
+        self.resume_progress_floor_by_index.pop(task_index, None)
 
         for idx, current_row in list(self.row_by_index.items()):
             if current_row > row:
@@ -2603,6 +3252,7 @@ class MainWindow(QMainWindow):
         if status in {"deleted", "ok", "failed", "skipped"}:
             return
         if status == "paused":
+            self._capture_resume_floor(task_index)
             self.worker.apply_command("resume", task_index)
             self.task_status_by_index[task_index] = "waiting"
             self._set_pause_btn_state(task_index, paused=False)
@@ -2641,6 +3291,9 @@ class MainWindow(QMainWindow):
         if not self.worker:
             return
         if self.pause_all_active:
+            for task_index, status in list(self.task_status_by_index.items()):
+                if status == "paused":
+                    self._capture_resume_floor(task_index)
             self.worker.apply_command("resume_all")
             self.pause_all_active = False
             self.pause_all_btn.setText(self.t("pause_all"))
@@ -2657,6 +3310,7 @@ class MainWindow(QMainWindow):
         self.delete_btn_by_index.clear()
         self.task_status_by_index.clear()
         self.task_url_by_index.clear()
+        self.resume_progress_floor_by_index.clear()
 
     def _clear_tasks_confirm(self) -> None:
         if self.worker:
@@ -2692,32 +3346,13 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, self.t("tip"), self.t("tip_need_url"))
             return None
 
-        out_dir_text = self.output_dir_input.text().strip()
-        if not out_dir_text:
-            QMessageBox.warning(self, self.t("tip"), self.t("tip_need_dir"))
-            return None
-
-        output_dir = Path(out_dir_text).expanduser().resolve()
-        output_dir.mkdir(parents=True, exist_ok=True)
-
         try:
-            ffmpeg = check_ffmpeg_bin("ffmpeg")
+            output_dir = self._resolve_output_dir()
+            options = self._build_default_options()
         except Exception as exc:
-            QMessageBox.critical(self, self.t("ffmpeg_missing"), str(exc))
+            title = self.t("ffmpeg_missing") if isinstance(exc, FileNotFoundError) else self.t("tip")
+            QMessageBox.critical(self, title, str(exc))
             return None
-
-        options = DownloadOptions(
-            ffmpeg=ffmpeg,
-            ffprobe=resolve_ffprobe_bin(),
-            retries=self.retries_input.value(),
-            overwrite=False,
-            timeout=30,
-            user_agent=None,
-            referer=None,
-            headers=[],
-            transcode_on_fail=True,
-            validate_after_copy=False,
-        )
 
         tasks = build_tasks(raw_entries, output_dir)
         jobs = self.jobs_input.value()
@@ -2733,8 +3368,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, self.t("tip"), self.t("tip_need_more"))
             return
 
-        output_dir = Path(self.output_dir_input.text().strip()).expanduser().resolve()
-        output_dir.mkdir(parents=True, exist_ok=True)
+        output_dir = self.worker.output_dir
 
         existing_urls = {u.strip() for u in self.task_url_by_index.values()}
         filtered: list[tuple[str | None, str]] = []
@@ -2767,47 +3401,14 @@ class MainWindow(QMainWindow):
             start_index=start_index,
             used_names=used_names,
         )
-        for task in new_tasks:
-            self._add_table_row(task)
-
-        added = self.worker.enqueue_tasks(new_tasks)
-        if added > 0:
-            self.pause_all_btn.setEnabled(True)
-            self.add_more_btn.setEnabled(True)
-            self.summary_label.setText(self.t("summary_added", count=added))
+        self._append_tasks_to_active_worker(new_tasks)
 
     def _start_download(self) -> None:
         prepared = self._prepare_tasks()
         if not prepared:
             return
         tasks, options, jobs, output_dir = prepared
-
-        self._clear_table_ui()
-        self.pause_all_active = False
-        self.pause_all_btn.setText(self.t("pause_all"))
-        self.pause_all_btn.setEnabled(True)
-        self.clear_tasks_btn.setEnabled(True)
-
-        for task in tasks:
-            self._add_table_row(task)
-
-        self.summary_label.setText(self.t("summary_preparing", count=len(tasks)))
-        self.start_btn.setEnabled(False)
-        self.add_more_btn.setEnabled(True)
-
-        self.worker = BatchWorker(tasks, options, jobs, output_dir)
-        self.worker_thread = QThread(self)
-        self.worker.moveToThread(self.worker_thread)
-
-        self.worker_thread.started.connect(self.worker.run)
-        self.worker.task_update.connect(self._on_task_update)
-        self.worker.batch_done.connect(self._on_batch_done)
-        self.worker.batch_done.connect(self.worker_thread.quit)
-        self.worker_thread.finished.connect(self._on_worker_finished)
-        self.worker_thread.finished.connect(self.worker.deleteLater)
-        self.worker_thread.finished.connect(self.worker_thread.deleteLater)
-
-        self.worker_thread.start()
+        self._start_worker_session(tasks, options, jobs, output_dir, clear_existing=True)
 
     @Slot(int, str, int, str)
     def _on_task_update(self, task_index: int, status: str, progress: int, detail: str) -> None:
@@ -2845,6 +3446,15 @@ class MainWindow(QMainWindow):
                     bar.setRange(0, 0)
                     bar.setFormat(self.t("progress_loading"))
             else:
+                floor = self.resume_progress_floor_by_index.get(task_index)
+                if floor is not None and progress < floor:
+                    if bar.maximum() == 0:
+                        bar.setRange(0, 100)
+                    bar.setValue(floor)
+                    bar.setFormat(f"{floor}%")
+                    return
+                if floor is not None and progress >= floor:
+                    self.resume_progress_floor_by_index.pop(task_index, None)
                 if bar.maximum() == 0:
                     bar.setRange(0, 100)
                 bar.setFormat(f"{progress}%")
@@ -2865,6 +3475,7 @@ class MainWindow(QMainWindow):
             return
 
         if status == "ok":
+            self.resume_progress_floor_by_index.pop(task_index, None)
             self._set_status(
                 row,
                 self.t("status_done"),
@@ -2883,6 +3494,7 @@ class MainWindow(QMainWindow):
             return
 
         if status == "skipped":
+            self.resume_progress_floor_by_index.pop(task_index, None)
             self._set_status(
                 row,
                 self.t("status_skipped"),
@@ -2916,6 +3528,7 @@ class MainWindow(QMainWindow):
             return
 
         if status == "deleted":
+            self.resume_progress_floor_by_index.pop(task_index, None)
             self._set_status(
                 row,
                 self.t("status_deleted"),
@@ -2933,6 +3546,7 @@ class MainWindow(QMainWindow):
             return
 
         if status == "failed":
+            self.resume_progress_floor_by_index.pop(task_index, None)
             self._set_status(
                 row,
                 self.t("status_failed"),
@@ -2958,19 +3572,6 @@ class MainWindow(QMainWindow):
             text += self.t("summary_done_file", file=failure_file)
         self.summary_label.setText(text)
 
-        if failed > 0:
-            QMessageBox.warning(
-                self,
-                self.t("dlg_batch_done"),
-                self.t("dlg_batch_done_fail", success=success, skipped=skipped, failed=failed, file=failure_file),
-            )
-        else:
-            QMessageBox.information(
-                self,
-                self.t("dlg_batch_done"),
-                self.t("dlg_batch_done_ok", success=success, skipped=skipped),
-            )
-
     @Slot()
     def _on_worker_finished(self) -> None:
         self.start_btn.setEnabled(True)
@@ -2979,6 +3580,11 @@ class MainWindow(QMainWindow):
         self.pause_all_btn.setText(self.t("pause_all"))
         self.worker = None
         self.worker_thread = None
+
+    def closeEvent(self, event: object) -> None:
+        if self.local_api_server:
+            self.local_api_server.stop()
+        super().closeEvent(event)
 
 
 def main() -> int:
