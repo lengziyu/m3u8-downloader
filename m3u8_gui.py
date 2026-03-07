@@ -291,6 +291,30 @@ def _candidate_binary_names(name: str) -> list[str]:
     return [name]
 
 
+def _normalize_windows_ffmpeg_candidate(path: str, binary_name: str) -> str:
+    p = Path(path)
+    lower = str(p).lower().replace("/", "\\")
+    if "\\chocolatey\\bin\\" in lower:
+        real = p.parent.parent / "lib" / "ffmpeg" / "tools" / "ffmpeg" / "bin" / f"{binary_name}.exe"
+        if real.exists():
+            return str(real)
+    return path
+
+
+def _binary_is_usable(path: str) -> bool:
+    try:
+        proc = subprocess.run(
+            [path, "-version"],
+            capture_output=True,
+            text=True,
+            timeout=6,
+            **subprocess_no_window_kwargs(),
+        )
+        return proc.returncode == 0
+    except Exception:
+        return False
+
+
 def _try_resolve_local_binary(name: str) -> str | None:
     candidates: list[Path] = []
     app_root = Path(__file__).resolve().parent
@@ -311,13 +335,21 @@ def _try_resolve_local_binary(name: str) -> str | None:
 
 
 def check_ffmpeg_bin(ffmpeg_bin: str) -> str:
+    candidates: list[str] = []
     local = _try_resolve_local_binary(ffmpeg_bin)
     if local:
-        return local
+        candidates.append(local)
 
-    resolved = shutil.which(ffmpeg_bin)
-    if resolved:
-        return resolved
+    system = shutil.which(ffmpeg_bin)
+    if system:
+        if os.name == "nt":
+            system = _normalize_windows_ffmpeg_candidate(system, "ffmpeg")
+        if system not in candidates:
+            candidates.append(system)
+
+    for candidate in candidates:
+        if _binary_is_usable(candidate):
+            return candidate
 
     raise FileNotFoundError(
         "找不到 ffmpeg。请先安装 ffmpeg 并加入 PATH，"
@@ -327,9 +359,16 @@ def check_ffmpeg_bin(ffmpeg_bin: str) -> str:
 
 def resolve_ffprobe_bin() -> str | None:
     local = _try_resolve_local_binary("ffprobe")
-    if local:
+    if local and _binary_is_usable(local):
         return local
-    return shutil.which("ffprobe")
+
+    system = shutil.which("ffprobe")
+    if system:
+        if os.name == "nt":
+            system = _normalize_windows_ffmpeg_candidate(system, "ffprobe")
+        if _binary_is_usable(system):
+            return system
+    return None
 
 
 def header_args(user_agent: str | None, referer: str | None, headers: list[str]) -> list[str]:

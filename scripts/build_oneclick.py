@@ -29,8 +29,28 @@ def add_binary_args(binary_path: str) -> list[str]:
     return ["--add-binary", f"{binary_path}{sep}."]
 
 
+def _resolve_real_windows_ffmpeg_binary(binary_path: str, binary_name: str) -> str:
+    path = Path(binary_path)
+    lower = str(path).lower().replace("/", "\\")
+    # Chocolatey "bin\\ffmpeg.exe" is usually a shim, not the real executable.
+    if "\\chocolatey\\bin\\" in lower:
+        real = path.parent.parent / "lib" / "ffmpeg" / "tools" / "ffmpeg" / "bin" / f"{binary_name}.exe"
+        if real.exists():
+            return str(real)
+    return binary_path
+
+
+def _resolve_binary(binary_name: str) -> str | None:
+    resolved = shutil.which(binary_name)
+    if not resolved:
+        return None
+    if os.name == "nt":
+        return _resolve_real_windows_ffmpeg_binary(resolved, binary_name)
+    return resolved
+
+
 def resolve_system_binaries() -> tuple[str | None, str | None]:
-    return shutil.which("ffmpeg"), shutil.which("ffprobe")
+    return _resolve_binary("ffmpeg"), _resolve_binary("ffprobe")
 
 
 def _build_trusted_hosts(index_url: str | None) -> list[str]:
