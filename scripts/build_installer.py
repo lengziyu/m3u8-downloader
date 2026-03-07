@@ -19,6 +19,19 @@ ROOT = Path(__file__).resolve().parent.parent
 DIST_DIR = ROOT / "dist"
 
 
+def read_project_version(default: str = "1.0.0") -> str:
+    version_file = ROOT / "VERSION"
+    if not version_file.exists():
+        return default
+    try:
+        line = (version_file.read_text(encoding="utf-8").splitlines() or [default])[0].strip()
+    except Exception:
+        return default
+    if not line:
+        return default
+    return line[1:] if line.lower().startswith("v") else line
+
+
 def run_cmd(cmd: list[str]) -> None:
     print(f"$ {' '.join(cmd)}")
     subprocess.run(cmd, cwd=ROOT, check=True)
@@ -163,7 +176,7 @@ def parse_args() -> argparse.Namespace:
         description="构建标准安装器：Windows 安装向导 .exe / macOS 安装向导 .pkg + .dmg"
     )
     parser.add_argument("--python", default=sys.executable, help="构建用 Python")
-    parser.add_argument("--version", default="1.0.0", help="安装器版本号")
+    parser.add_argument("--version", default=read_project_version(), help="安装器版本号")
     parser.add_argument("--app-version", default=None, help="客户端版本号（默认跟随 --version）")
     parser.add_argument("--skip-build", action="store_true", help="跳过基础应用构建")
     parser.add_argument("--skip-install", action="store_true", help="传递给 build_oneclick.py")

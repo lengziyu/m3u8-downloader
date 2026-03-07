@@ -64,10 +64,317 @@ DEFAULT_USER_AGENT = (
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
 )
 APP_DISPLAY_NAME = "M3U8-Downloader"
-APP_VERSION = os.environ.get("M3U8_DOWNLOADER_APP_VERSION", "1.0.0").strip()
-if APP_VERSION.lower().startswith("v"):
-    APP_VERSION = APP_VERSION[1:]
 GITHUB_REPO = os.environ.get("M3U8_DOWNLOADER_GITHUB_REPO", "lengziyu/m3u8-downloader")
+
+
+def normalize_version_text(text: str) -> str:
+    value = (text or "").strip()
+    if value.lower().startswith("v"):
+        value = value[1:]
+    return value or "1.0.0"
+
+
+def read_local_version_file() -> str | None:
+    version_file = Path(__file__).resolve().parent / "VERSION"
+    if not version_file.exists():
+        return None
+    try:
+        for line in version_file.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line:
+                return normalize_version_text(line)
+    except Exception:
+        return None
+    return None
+
+
+APP_VERSION = normalize_version_text(
+    os.environ.get("M3U8_DOWNLOADER_APP_VERSION", "") or (read_local_version_file() or "1.0.0")
+)
+
+LANG_ORDER = ["zh", "en", "ja"]
+LANG_LABEL = {"zh": "中", "en": "EN", "ja": "日"}
+I18N = {
+    "zh": {
+        "settings_toggle": "⚙ 设置",
+        "settings_title": "下载设置",
+        "output_dir": "下载目录",
+        "choose_dir": "选择目录",
+        "jobs": "并发",
+        "retries": "重试",
+        "title_sub": "支持 Windows 10/11、macOS；批量下载为 MP4；失败任务自动导出",
+        "input_title": "M3U8 链接输入",
+        "single_hint": "逐条输入：每个输入框一个链接，填完会自动新增下一行",
+        "single_remove": "删除",
+        "batch_hint": "批量文本：支持多行，也支持一行用 | 分隔多个链接",
+        "batch_clear": "清空",
+        "tab_single": "逐条输入",
+        "tab_batch": "批量文本",
+        "start": "开始下载",
+        "add_more": "继续添加",
+        "summary_wait": "等待开始",
+        "task_progress": "任务进度",
+        "pause_all": "暂停全部",
+        "resume_all": "继续全部",
+        "clear_tasks": "清空任务",
+        "col_idx": "序号",
+        "col_name": "输出文件",
+        "col_status": "状态",
+        "col_progress": "进度",
+        "col_detail": "详情",
+        "col_actions": "操作",
+        "version_checking": "⟳ 检查中... v{version}",
+        "version_plain": "⟳ v{version}",
+        "dlg_version": "版本检测",
+        "version_repo_missing": "未配置 GitHub 仓库。请设置 m3u8_gui.py 中的 GITHUB_REPO，或设置环境变量 M3U8_DOWNLOADER_GITHUB_REPO=owner/repo。",
+        "version_latest": "已是最新版本。\n当前版本：v{current}\n最新版本：{latest}",
+        "dlg_new_version": "发现新版本",
+        "version_update": "当前版本：v{current}\n最新版本：{latest}\n\n是否前往 Releases 下载更新？",
+        "version_failed": "无法检测更新：{err}",
+        "settings_collapse": "收起设置",
+        "settings_expand": "展开设置",
+        "status_waiting": "准备中",
+        "status_downloading": "正在下载",
+        "status_done": "已完成",
+        "status_skipped": "已跳过",
+        "status_paused": "已暂停",
+        "status_deleted": "已删除",
+        "status_failed": "下载失败",
+        "row_pause": "暂停",
+        "row_resume": "继续",
+        "row_delete": "删除",
+        "select_output_dir": "选择下载目录",
+        "dlg_confirm_delete": "确认删除",
+        "dlg_confirm_delete_running": "确定删除这个任务吗？运行中的任务会立即中断。",
+        "dlg_confirm_delete_row": "确定从列表中移除这个任务吗？",
+        "dlg_confirm_clear": "确认清空任务",
+        "dlg_confirm_clear_running": "确定清空所有任务吗？正在下载的任务会被中断。",
+        "dlg_confirm_clear_idle": "确定清空任务列表吗？",
+        "summary_clear_requested": "已请求清空任务，等待当前线程退出...",
+        "summary_cleared": "任务列表已清空",
+        "tip": "提示",
+        "tip_need_url": "请输入至少一个 m3u8 链接。",
+        "tip_need_dir": "请先选择下载目录。",
+        "tip_no_running": "当前没有运行中的任务，请使用“开始下载”。",
+        "tip_need_more": "请输入要继续添加的链接。",
+        "tip_no_new": "没有可添加的新任务（可能都重复或格式无效）。",
+        "ffmpeg_missing": "ffmpeg 未找到",
+        "summary_added": "已新增 {count} 个任务",
+        "summary_preparing": "任务 {count} 条，准备开始...",
+        "progress_loading": "加载中...",
+        "progress_paused": "暂停",
+        "progress_deleted": "已删",
+        "progress_failed": "失败",
+        "summary_done": "完成：成功 {success} | 跳过 {skipped} | 失败 {failed}",
+        "summary_done_file": " | 失败清单：{file}",
+        "dlg_batch_done": "任务完成",
+        "dlg_batch_done_fail": "成功 {success}，跳过 {skipped}，失败 {failed}。\n失败清单已导出：\n{file}",
+        "dlg_batch_done_ok": "全部完成。成功 {success}，跳过 {skipped}。",
+        "single_placeholder": "https://example.com/video.m3u8",
+        "batch_placeholder": "示例:\nhttps://example.com/episode01.m3u8\n日本語字幕|https://example.com/episode02.m3u8\nhttps://example.com/episode03.m3u8#日文\n\n或一行：\nhttps://a.m3u8|https://b.m3u8|https://c.m3u8",
+        "detail_wait_dispatch": "等待执行",
+        "detail_retry_wait": "重试等待中",
+        "detail_validating": "校验文件",
+        "detail_copy_fallback": "copy 失败，转码中",
+        "detail_copy_invalid_fix": "copy 成功但文件异常，转码修复中",
+        "detail_finished": "下载完成",
+        "detail_skipped": "目标文件已存在",
+        "detail_paused": "已暂停",
+        "detail_deleted": "已删除",
+        "detail_interrupted": "任务已中断",
+        "detail_copy_transcoded": "copy 失败，已自动转码",
+        "detail_copy_fixed": "copy 文件异常，已自动转码修复",
+        "detail_unknown_err": "未知错误",
+        "detail_downloading_try": "下载中（尝试 {attempt}/{total}）",
+        "lang_tip": "切换语言",
+    },
+    "en": {
+        "settings_toggle": "⚙ Settings",
+        "settings_title": "Download Settings",
+        "output_dir": "Output Folder",
+        "choose_dir": "Choose Folder",
+        "jobs": "Concurrency",
+        "retries": "Retries",
+        "title_sub": "Windows 10/11 & macOS; batch M3U8 to MP4; failed tasks auto-export",
+        "input_title": "M3U8 Input",
+        "single_hint": "Single mode: one URL per line edit; a new line is auto-created after input.",
+        "single_remove": "Delete",
+        "batch_hint": "Batch text: supports multiple lines, or single line separated by |.",
+        "batch_clear": "Clear",
+        "tab_single": "Single",
+        "tab_batch": "Batch",
+        "start": "Start Download",
+        "add_more": "Add More",
+        "summary_wait": "Waiting to start",
+        "task_progress": "Task Progress",
+        "pause_all": "Pause All",
+        "resume_all": "Resume All",
+        "clear_tasks": "Clear Tasks",
+        "col_idx": "#",
+        "col_name": "Output File",
+        "col_status": "Status",
+        "col_progress": "Progress",
+        "col_detail": "Detail",
+        "col_actions": "Action",
+        "version_checking": "⟳ Checking... v{version}",
+        "version_plain": "⟳ v{version}",
+        "dlg_version": "Version Check",
+        "version_repo_missing": "GitHub repo is not configured. Set GITHUB_REPO in m3u8_gui.py or M3U8_DOWNLOADER_GITHUB_REPO=owner/repo.",
+        "version_latest": "You are up to date.\nCurrent: v{current}\nLatest: {latest}",
+        "dlg_new_version": "Update Available",
+        "version_update": "Current: v{current}\nLatest: {latest}\n\nOpen Releases page now?",
+        "version_failed": "Update check failed: {err}",
+        "settings_collapse": "Collapse settings",
+        "settings_expand": "Expand settings",
+        "status_waiting": "Waiting",
+        "status_downloading": "Downloading",
+        "status_done": "Done",
+        "status_skipped": "Skipped",
+        "status_paused": "Paused",
+        "status_deleted": "Deleted",
+        "status_failed": "Failed",
+        "row_pause": "Pause",
+        "row_resume": "Resume",
+        "row_delete": "Delete",
+        "select_output_dir": "Select Download Folder",
+        "dlg_confirm_delete": "Confirm Delete",
+        "dlg_confirm_delete_running": "Delete this task? Running task will stop immediately.",
+        "dlg_confirm_delete_row": "Remove this task from the list?",
+        "dlg_confirm_clear": "Confirm Clear",
+        "dlg_confirm_clear_running": "Clear all tasks? Running tasks will be stopped.",
+        "dlg_confirm_clear_idle": "Clear task list?",
+        "summary_clear_requested": "Clear requested. Waiting for running workers to stop...",
+        "summary_cleared": "Task list cleared",
+        "tip": "Notice",
+        "tip_need_url": "Please input at least one m3u8 URL.",
+        "tip_need_dir": "Please choose output folder first.",
+        "tip_no_running": "No running task. Click Start Download first.",
+        "tip_need_more": "Please input URLs to add.",
+        "tip_no_new": "No new task to add (duplicate or invalid).",
+        "ffmpeg_missing": "ffmpeg not found",
+        "summary_added": "{count} new task(s) added",
+        "summary_preparing": "{count} task(s), preparing...",
+        "progress_loading": "Loading...",
+        "progress_paused": "Paused",
+        "progress_deleted": "Deleted",
+        "progress_failed": "Failed",
+        "summary_done": "Done: success {success} | skipped {skipped} | failed {failed}",
+        "summary_done_file": " | failed list: {file}",
+        "dlg_batch_done": "Batch Completed",
+        "dlg_batch_done_fail": "Success {success}, skipped {skipped}, failed {failed}.\nFailed list exported:\n{file}",
+        "dlg_batch_done_ok": "All done. Success {success}, skipped {skipped}.",
+        "single_placeholder": "https://example.com/video.m3u8",
+        "batch_placeholder": "Examples:\nhttps://example.com/episode01.m3u8\nEnglish_sub|https://example.com/episode02.m3u8\nhttps://example.com/episode03.m3u8#JP\n\nOr one line:\nhttps://a.m3u8|https://b.m3u8|https://c.m3u8",
+        "detail_wait_dispatch": "Queued",
+        "detail_retry_wait": "Waiting before retry",
+        "detail_validating": "Validating output",
+        "detail_copy_fallback": "Copy failed, transcoding",
+        "detail_copy_invalid_fix": "Copy completed but invalid output, repairing with transcode",
+        "detail_finished": "Downloaded",
+        "detail_skipped": "Output already exists",
+        "detail_paused": "Paused",
+        "detail_deleted": "Deleted",
+        "detail_interrupted": "Interrupted",
+        "detail_copy_transcoded": "Copy failed, auto transcoded",
+        "detail_copy_fixed": "Invalid copy output fixed by transcode",
+        "detail_unknown_err": "Unknown error",
+        "detail_downloading_try": "Downloading (attempt {attempt}/{total})",
+        "lang_tip": "Switch language",
+    },
+    "ja": {
+        "settings_toggle": "⚙ 設定",
+        "settings_title": "ダウンロード設定",
+        "output_dir": "保存先フォルダ",
+        "choose_dir": "フォルダ選択",
+        "jobs": "並列数",
+        "retries": "リトライ",
+        "title_sub": "Windows 10/11・macOS 対応、M3U8 を MP4 に一括保存、失敗タスクを自動出力",
+        "input_title": "M3U8 入力",
+        "single_hint": "1件入力: 1行に1リンク。入力すると次の行が自動追加されます。",
+        "single_remove": "削除",
+        "batch_hint": "一括入力: 複数行、または 1 行を | 区切りで入力できます。",
+        "batch_clear": "クリア",
+        "tab_single": "1件入力",
+        "tab_batch": "一括入力",
+        "start": "ダウンロード開始",
+        "add_more": "追加",
+        "summary_wait": "開始待機中",
+        "task_progress": "タスク進捗",
+        "pause_all": "すべて一時停止",
+        "resume_all": "すべて再開",
+        "clear_tasks": "タスククリア",
+        "col_idx": "番号",
+        "col_name": "出力ファイル",
+        "col_status": "状態",
+        "col_progress": "進捗",
+        "col_detail": "詳細",
+        "col_actions": "操作",
+        "version_checking": "⟳ 確認中... v{version}",
+        "version_plain": "⟳ v{version}",
+        "dlg_version": "バージョン確認",
+        "version_repo_missing": "GitHub リポジトリが未設定です。m3u8_gui.py の GITHUB_REPO または M3U8_DOWNLOADER_GITHUB_REPO=owner/repo を設定してください。",
+        "version_latest": "最新バージョンです。\n現在: v{current}\n最新: {latest}",
+        "dlg_new_version": "新しいバージョン",
+        "version_update": "現在: v{current}\n最新: {latest}\n\nReleases ページを開きますか？",
+        "version_failed": "更新確認に失敗しました: {err}",
+        "settings_collapse": "設定を折りたたむ",
+        "settings_expand": "設定を展開",
+        "status_waiting": "待機中",
+        "status_downloading": "ダウンロード中",
+        "status_done": "完了",
+        "status_skipped": "スキップ",
+        "status_paused": "一時停止",
+        "status_deleted": "削除済み",
+        "status_failed": "失敗",
+        "row_pause": "停止",
+        "row_resume": "再開",
+        "row_delete": "削除",
+        "select_output_dir": "保存先フォルダを選択",
+        "dlg_confirm_delete": "削除確認",
+        "dlg_confirm_delete_running": "このタスクを削除しますか？実行中の場合は中断されます。",
+        "dlg_confirm_delete_row": "このタスクを一覧から削除しますか？",
+        "dlg_confirm_clear": "クリア確認",
+        "dlg_confirm_clear_running": "すべてのタスクをクリアしますか？実行中タスクは中断されます。",
+        "dlg_confirm_clear_idle": "タスクリストをクリアしますか？",
+        "summary_clear_requested": "クリア要求を送信しました。実行中タスクの終了を待っています...",
+        "summary_cleared": "タスクリストをクリアしました",
+        "tip": "ヒント",
+        "tip_need_url": "少なくとも1つの m3u8 リンクを入力してください。",
+        "tip_need_dir": "先に保存先フォルダを選択してください。",
+        "tip_no_running": "実行中タスクがありません。先に開始してください。",
+        "tip_need_more": "追加するリンクを入力してください。",
+        "tip_no_new": "追加できる新規タスクがありません（重複/無効）。",
+        "ffmpeg_missing": "ffmpeg が見つかりません",
+        "summary_added": "{count} 件を追加しました",
+        "summary_preparing": "{count} 件のタスクを準備中...",
+        "progress_loading": "読み込み中...",
+        "progress_paused": "停止",
+        "progress_deleted": "削除",
+        "progress_failed": "失敗",
+        "summary_done": "完了: 成功 {success} | スキップ {skipped} | 失敗 {failed}",
+        "summary_done_file": " | 失敗リスト: {file}",
+        "dlg_batch_done": "タスク完了",
+        "dlg_batch_done_fail": "成功 {success}、スキップ {skipped}、失敗 {failed}。\n失敗リストを出力しました:\n{file}",
+        "dlg_batch_done_ok": "すべて完了。成功 {success}、スキップ {skipped}。",
+        "single_placeholder": "https://example.com/video.m3u8",
+        "batch_placeholder": "例:\nhttps://example.com/episode01.m3u8\n日本語字幕|https://example.com/episode02.m3u8\nhttps://example.com/episode03.m3u8#JP\n\nまたは1行:\nhttps://a.m3u8|https://b.m3u8|https://c.m3u8",
+        "detail_wait_dispatch": "待機中",
+        "detail_retry_wait": "再試行まで待機",
+        "detail_validating": "ファイル検証中",
+        "detail_copy_fallback": "copy 失敗、再エンコード中",
+        "detail_copy_invalid_fix": "copy 成功だが異常、再エンコードで修復中",
+        "detail_finished": "完了",
+        "detail_skipped": "既に同名ファイルがあります",
+        "detail_paused": "一時停止",
+        "detail_deleted": "削除済み",
+        "detail_interrupted": "中断されました",
+        "detail_copy_transcoded": "copy 失敗、再エンコードで完了",
+        "detail_copy_fixed": "copy 異常を再エンコードで修復",
+        "detail_unknown_err": "不明なエラー",
+        "detail_downloading_try": "ダウンロード中（{attempt}/{total} 回目）",
+        "lang_tip": "言語切替",
+    },
+}
 
 
 @dataclass(frozen=True)
@@ -1010,6 +1317,7 @@ class MainWindow(QMainWindow):
         self.setWindowIcon(create_app_icon())
 
         self.current_theme = "purple"
+        self.current_lang = "zh"
         self.settings_panel_expanded = True
         self.settings_anim: QParallelAnimationGroup | None = None
         self.worker_thread: QThread | None = None
@@ -1026,7 +1334,16 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self.update_check_done.connect(self._on_update_check_done)
         self._apply_theme(self.current_theme)
+        self._refresh_i18n_texts()
         self._animate_window_enter()
+
+    def t(self, key: str, **kwargs: object) -> str:
+        lang_pack = I18N.get(self.current_lang, I18N["zh"])
+        template = lang_pack.get(key) or I18N["zh"].get(key) or key
+        try:
+            return template.format(**kwargs)
+        except Exception:
+            return template
 
     def _build_ui(self) -> None:
         root = QWidget(self)
@@ -1044,7 +1361,7 @@ class MainWindow(QMainWindow):
         settings_layout.setContentsMargins(10, 12, 10, 12)
         settings_layout.setSpacing(10)
 
-        self.settings_toggle_btn = QPushButton("⚙ 设置")
+        self.settings_toggle_btn = QPushButton("")
         self.settings_toggle_btn.setObjectName("settingsToggleBtn")
         self.settings_toggle_btn.setMinimumHeight(40)
         self.settings_toggle_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
@@ -1057,24 +1374,24 @@ class MainWindow(QMainWindow):
         settings_content_layout.setContentsMargins(6, 4, 6, 4)
         settings_content_layout.setSpacing(12)
 
-        settings_title = QLabel("下载设置")
-        settings_title.setObjectName("sectionTitle")
-        settings_content_layout.addWidget(settings_title)
+        self.settings_title_label = QLabel("")
+        self.settings_title_label.setObjectName("sectionTitle")
+        settings_content_layout.addWidget(self.settings_title_label)
 
-        output_label = QLabel("下载目录")
-        output_label.setObjectName("fieldLabel")
+        self.output_label = QLabel("")
+        self.output_label.setObjectName("fieldLabel")
         self.output_dir_input = QLineEdit(str((Path.cwd() / "downloads").resolve()))
         self.output_dir_input.setObjectName("pathInput")
-        browse_btn = QPushButton("选择目录")
-        browse_btn.setObjectName("secondaryBtn")
-        browse_btn.clicked.connect(self._choose_output_dir)
+        self.browse_btn = QPushButton("")
+        self.browse_btn.setObjectName("secondaryBtn")
+        self.browse_btn.clicked.connect(self._choose_output_dir)
 
-        settings_content_layout.addWidget(output_label)
+        settings_content_layout.addWidget(self.output_label)
         settings_content_layout.addWidget(self.output_dir_input)
-        settings_content_layout.addWidget(browse_btn)
+        settings_content_layout.addWidget(self.browse_btn)
 
-        jobs_label = QLabel("并发")
-        jobs_label.setObjectName("fieldLabel")
+        self.jobs_label = QLabel("")
+        self.jobs_label.setObjectName("fieldLabel")
         self.jobs_input = QSpinBox()
         self.jobs_input.setRange(10, 200)
         self.jobs_input.setSingleStep(10)
@@ -1107,8 +1424,8 @@ class MainWindow(QMainWindow):
         jobs_row.addWidget(self.jobs_input, 1)
         jobs_row.addWidget(self.jobs_plus_btn)
 
-        retries_label = QLabel("重试")
-        retries_label.setObjectName("fieldLabel")
+        self.retries_label = QLabel("")
+        self.retries_label.setObjectName("fieldLabel")
         self.retries_input = QSpinBox()
         self.retries_input.setRange(0, 10)
         self.retries_input.setValue(2)
@@ -1140,9 +1457,9 @@ class MainWindow(QMainWindow):
         retries_row.addWidget(self.retries_input, 1)
         retries_row.addWidget(self.retries_plus_btn)
 
-        settings_content_layout.addWidget(jobs_label)
+        settings_content_layout.addWidget(self.jobs_label)
         settings_content_layout.addLayout(jobs_row)
-        settings_content_layout.addWidget(retries_label)
+        settings_content_layout.addWidget(self.retries_label)
         settings_content_layout.addLayout(retries_row)
         settings_content_layout.addStretch(1)
         settings_layout.addWidget(self.settings_content, 1)
@@ -1165,18 +1482,23 @@ class MainWindow(QMainWindow):
         header_layout.setContentsMargins(24, 16, 24, 16)
         header_layout.setSpacing(12)
 
-        title = QLabel(APP_DISPLAY_NAME)
-        title.setObjectName("titleLabel")
-        subtitle = QLabel("支持 Windows 10/11、macOS；批量下载为 MP4；失败任务自动导出")
-        subtitle.setObjectName("subtitleLabel")
+        self.title_label = QLabel(APP_DISPLAY_NAME)
+        self.title_label.setObjectName("titleLabel")
+        self.subtitle_label = QLabel("")
+        self.subtitle_label.setObjectName("subtitleLabel")
+        self.lang_btn = QPushButton("")
+        self.lang_btn.setObjectName("themeIconBtn")
+        self.lang_btn.setFixedSize(38, 38)
+        self.lang_btn.clicked.connect(self._toggle_language)
         self.theme_btn = QPushButton("◐")
         self.theme_btn.setObjectName("themeIconBtn")
         self.theme_btn.setFixedSize(38, 38)
         self.theme_btn.clicked.connect(self._toggle_theme)
 
-        header_layout.addWidget(title, 0, Qt.AlignVCenter)
-        header_layout.addWidget(subtitle, 0, Qt.AlignVCenter)
+        header_layout.addWidget(self.title_label, 0, Qt.AlignVCenter)
+        header_layout.addWidget(self.subtitle_label, 0, Qt.AlignVCenter)
         header_layout.addStretch(1)
+        header_layout.addWidget(self.lang_btn, 0, Qt.AlignRight | Qt.AlignVCenter)
         header_layout.addWidget(self.theme_btn, 0, Qt.AlignRight | Qt.AlignVCenter)
 
         right_layout.addWidget(header)
@@ -1187,8 +1509,8 @@ class MainWindow(QMainWindow):
         input_layout.setContentsMargins(20, 18, 20, 18)
         input_layout.setSpacing(10)
 
-        input_title = QLabel("M3U8 链接输入")
-        input_title.setObjectName("sectionTitle")
+        self.input_title_label = QLabel("")
+        self.input_title_label.setObjectName("sectionTitle")
 
         self.input_tabs = QTabWidget()
         self.input_tabs.setObjectName("inputTabs")
@@ -1199,17 +1521,28 @@ class MainWindow(QMainWindow):
         single_layout.setContentsMargins(6, 8, 6, 6)
         single_layout.setSpacing(8)
 
-        single_hint = QLabel("逐条输入：每个输入框一个链接，填完会自动新增下一行")
-        single_hint.setObjectName("inputHintLabel")
-        single_layout.addWidget(single_hint)
+        single_hint_row = QHBoxLayout()
+        single_hint_row.setContentsMargins(0, 0, 0, 0)
+        single_hint_row.setSpacing(8)
+        self.single_hint_label = QLabel("")
+        self.single_hint_label.setObjectName("inputHintLabel")
+        self.single_remove_btn = QPushButton("")
+        self.single_remove_btn.setObjectName("miniBtn")
+        self.single_remove_btn.setMinimumHeight(24)
+        self.single_remove_btn.clicked.connect(self._on_single_remove_clicked)
+        single_hint_row.addWidget(self.single_hint_label, 1)
+        single_hint_row.addWidget(self.single_remove_btn, 0, Qt.AlignRight)
+        single_layout.addLayout(single_hint_row)
 
         self.single_scroll = QScrollArea()
+        self.single_scroll.setObjectName("singleScroll")
         self.single_scroll.setWidgetResizable(True)
         self.single_scroll.setFrameShape(QFrame.NoFrame)
         self.single_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.single_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
 
         self.single_container = QWidget()
+        self.single_container.setObjectName("singleContainer")
         self.single_lines_layout = QVBoxLayout(self.single_container)
         self.single_lines_layout.setContentsMargins(2, 2, 2, 2)
         self.single_lines_layout.setSpacing(8)
@@ -1224,45 +1557,46 @@ class MainWindow(QMainWindow):
         batch_layout.setContentsMargins(6, 8, 6, 10)
         batch_layout.setSpacing(8)
 
-        batch_hint = QLabel("批量文本：支持多行，也支持一行用 | 分隔多个链接")
-        batch_hint.setObjectName("inputHintLabel")
+        batch_hint_row = QHBoxLayout()
+        batch_hint_row.setContentsMargins(0, 0, 0, 0)
+        batch_hint_row.setSpacing(8)
+        self.batch_hint_label = QLabel("")
+        self.batch_hint_label.setObjectName("inputHintLabel")
+        self.batch_clear_btn = QPushButton("")
+        self.batch_clear_btn.setObjectName("miniBtn")
+        self.batch_clear_btn.setMinimumHeight(24)
+        self.batch_clear_btn.clicked.connect(lambda: self.url_input.clear())
+        batch_hint_row.addWidget(self.batch_hint_label, 1)
+        batch_hint_row.addWidget(self.batch_clear_btn, 0, Qt.AlignRight)
         self.url_input = QTextEdit()
         self.url_input.setObjectName("urlInput")
-        self.url_input.setPlaceholderText(
-            "示例:\n"
-            "https://example.com/1.m3u8\n"
-            "https://example.com/2.m3u8\n"
-            "https://example.com/3.m3u8\n"
-            "\n或一行：\n"
-            "https://a.m3u8|https://b.m3u8|https://c.m3u8"
-        )
         self.url_input.setMinimumHeight(140)
-        batch_layout.addWidget(batch_hint)
+        batch_layout.addLayout(batch_hint_row)
         batch_layout.addWidget(self.url_input, 1)
         batch_layout.addSpacing(2)
 
-        self.input_tabs.addTab(single_tab, "逐条输入")
-        self.input_tabs.addTab(batch_tab, "批量文本")
+        self.input_tabs.addTab(single_tab, "")
+        self.input_tabs.addTab(batch_tab, "")
 
-        input_layout.addWidget(input_title)
+        input_layout.addWidget(self.input_title_label)
         input_layout.addWidget(self.input_tabs)
         right_layout.addWidget(input_card)
 
         action_row = QHBoxLayout()
         action_row.setSpacing(10)
 
-        self.start_btn = QPushButton("开始下载")
+        self.start_btn = QPushButton("")
         self.start_btn.setObjectName("startBtn")
         self.start_btn.setMinimumHeight(48)
         self.start_btn.clicked.connect(self._start_download)
 
-        self.add_more_btn = QPushButton("继续添加")
+        self.add_more_btn = QPushButton("")
         self.add_more_btn.setObjectName("tableActionBtn")
         self.add_more_btn.setMinimumHeight(48)
         self.add_more_btn.setEnabled(False)
         self.add_more_btn.clicked.connect(self._append_tasks_while_running)
 
-        self.summary_label = QLabel("等待开始")
+        self.summary_label = QLabel("")
         self.summary_label.setObjectName("summaryLabel")
 
         action_row.addWidget(self.start_btn, 0)
@@ -1279,18 +1613,18 @@ class MainWindow(QMainWindow):
 
         table_head = QHBoxLayout()
         table_head.setSpacing(10)
-        table_title = QLabel("任务进度")
-        table_title.setObjectName("sectionTitle")
-        table_head.addWidget(table_title)
+        self.table_title_label = QLabel("")
+        self.table_title_label.setObjectName("sectionTitle")
+        table_head.addWidget(self.table_title_label)
         table_head.addStretch(1)
 
-        self.pause_all_btn = QPushButton("暂停全部")
+        self.pause_all_btn = QPushButton("")
         self.pause_all_btn.setObjectName("tableActionBtn")
         self.pause_all_btn.setMinimumHeight(36)
         self.pause_all_btn.clicked.connect(self._toggle_pause_all)
         self.pause_all_btn.setEnabled(False)
 
-        self.clear_tasks_btn = QPushButton("清空任务")
+        self.clear_tasks_btn = QPushButton("")
         self.clear_tasks_btn.setObjectName("dangerBtn")
         self.clear_tasks_btn.setMinimumHeight(36)
         self.clear_tasks_btn.clicked.connect(self._clear_tasks_confirm)
@@ -1299,7 +1633,7 @@ class MainWindow(QMainWindow):
         table_head.addWidget(self.clear_tasks_btn)
 
         self.table = QTableWidget(0, 6)
-        self.table.setHorizontalHeaderLabels(["序号", "输出文件", "状态", "进度", "详情", "操作"])
+        self.table.setHorizontalHeaderLabels(["", "", "", "", "", ""])
         self.table.verticalHeader().setVisible(False)
         self.table.setAlternatingRowColors(True)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
@@ -1346,12 +1680,118 @@ class MainWindow(QMainWindow):
     def _toggle_settings_panel(self) -> None:
         self._set_settings_panel_expanded(not self.settings_panel_expanded, animate=True)
 
+    def _toggle_language(self) -> None:
+        cur_idx = LANG_ORDER.index(self.current_lang) if self.current_lang in LANG_ORDER else 0
+        self.current_lang = LANG_ORDER[(cur_idx + 1) % len(LANG_ORDER)]
+        self._refresh_i18n_texts()
+
+    def _refresh_i18n_texts(self) -> None:
+        self.settings_title_label.setText(self.t("settings_title"))
+        self.output_label.setText(self.t("output_dir"))
+        self.browse_btn.setText(self.t("choose_dir"))
+        self.jobs_label.setText(self.t("jobs"))
+        self.retries_label.setText(self.t("retries"))
+        self.title_label.setText(APP_DISPLAY_NAME)
+        self.subtitle_label.setText(self.t("title_sub"))
+        self.input_title_label.setText(self.t("input_title"))
+        self.single_hint_label.setText(self.t("single_hint"))
+        self.batch_hint_label.setText(self.t("batch_hint"))
+        self.single_remove_btn.setText(self.t("single_remove"))
+        self.batch_clear_btn.setText(self.t("batch_clear"))
+        self.start_btn.setText(self.t("start"))
+        self.add_more_btn.setText(self.t("add_more"))
+        self.table_title_label.setText(self.t("task_progress"))
+        self.pause_all_btn.setText(self.t("resume_all") if self.pause_all_active else self.t("pause_all"))
+        self.clear_tasks_btn.setText(self.t("clear_tasks"))
+        self.summary_label.setText(self.summary_label.text() or self.t("summary_wait"))
+        self.input_tabs.setTabText(0, self.t("tab_single"))
+        self.input_tabs.setTabText(1, self.t("tab_batch"))
+        self.url_input.setPlaceholderText(self.t("batch_placeholder"))
+        for line in self.single_url_inputs:
+            line.setPlaceholderText(self.t("single_placeholder"))
+        self.lang_btn.setText(LANG_LABEL.get(self.current_lang, "中"))
+        self.lang_btn.setToolTip(self.t("lang_tip"))
+
+        self.table.setHorizontalHeaderLabels(
+            [
+                self.t("col_idx"),
+                self.t("col_name"),
+                self.t("col_status"),
+                self.t("col_progress"),
+                self.t("col_detail"),
+                self.t("col_actions"),
+            ]
+        )
+
+        for idx, pause_btn in self.pause_btn_by_index.items():
+            status = self.task_status_by_index.get(idx, "waiting")
+            if status == "paused":
+                pause_btn.setText(self.t("row_resume"))
+            else:
+                pause_btn.setText(self.t("row_pause"))
+        for delete_btn in self.delete_btn_by_index.values():
+            delete_btn.setText(self.t("row_delete"))
+
+        for row in range(self.table.rowCount()):
+            idx_item = self.table.item(row, 0)
+            if not idx_item:
+                continue
+            try:
+                task_idx = int(idx_item.text())
+            except Exception:
+                continue
+            status_code = self.task_status_by_index.get(task_idx)
+            status_item = self.table.item(row, 2)
+            if status_code and status_item:
+                status_text = {
+                    "waiting": self.t("status_waiting"),
+                    "running": self.t("status_waiting"),
+                    "ok": self.t("status_done"),
+                    "skipped": self.t("status_skipped"),
+                    "paused": self.t("status_paused"),
+                    "deleted": self.t("status_deleted"),
+                    "failed": self.t("status_failed"),
+                }.get(status_code, status_item.text())
+                status_item.setText(status_text)
+            detail_item = self.table.item(row, 4)
+            if detail_item:
+                detail_item.setText(self._localize_detail(detail_item.text()))
+
+        self._set_settings_panel_expanded(self.settings_panel_expanded, animate=False)
+        self._update_version_btn_text()
+
+    def _localize_detail(self, detail: str) -> str:
+        if self.current_lang == "zh" or not detail:
+            return detail
+        text = detail.strip()
+        exact_map = {
+            "等待执行": self.t("detail_wait_dispatch"),
+            "重试等待中": self.t("detail_retry_wait"),
+            "校验文件": self.t("detail_validating"),
+            "copy 失败，转码中": self.t("detail_copy_fallback"),
+            "copy 成功但文件异常，转码修复中": self.t("detail_copy_invalid_fix"),
+            "下载完成": self.t("detail_finished"),
+            "目标文件已存在": self.t("detail_skipped"),
+            "已暂停": self.t("detail_paused"),
+            "已删除": self.t("detail_deleted"),
+            "任务已中断": self.t("detail_interrupted"),
+            "copy 失败，已自动转码": self.t("detail_copy_transcoded"),
+            "copy 文件异常，已自动转码修复": self.t("detail_copy_fixed"),
+            "未知错误": self.t("detail_unknown_err"),
+        }
+        if text in exact_map:
+            return exact_map[text]
+        m = re.match(r"下载中（尝试\s*(\d+)\s*/\s*(\d+)）", text)
+        if m:
+            return self.t("detail_downloading_try", attempt=m.group(1), total=m.group(2))
+        return text
+
     def _update_version_btn_text(self) -> None:
         if self.settings_panel_expanded:
             if self.update_checking:
-                self.version_btn.setText(f"⟳ 检查中... v{APP_VERSION}")
+                self.version_btn.setText(self.t("version_checking", version=APP_VERSION))
             else:
-                self.version_btn.setText(f"⟳ v{APP_VERSION}")
+                self.version_btn.setText(self.t("version_plain", version=APP_VERSION))
         else:
             self.version_btn.setText("⟳")
 
@@ -1361,9 +1801,8 @@ class MainWindow(QMainWindow):
         if not GITHUB_REPO or GITHUB_REPO.startswith("YOUR_GITHUB_OWNER/"):
             QMessageBox.information(
                 self,
-                "版本检测",
-                "未配置 GitHub 仓库。请设置 m3u8_gui.py 中的 GITHUB_REPO，或设置环境变量 "
-                "M3U8_DOWNLOADER_GITHUB_REPO=owner/repo。",
+                self.t("dlg_version"),
+                self.t("version_repo_missing"),
             )
             return
 
@@ -1394,16 +1833,16 @@ class MainWindow(QMainWindow):
         if status == "latest":
             QMessageBox.information(
                 self,
-                "版本检测",
-                f"已是最新版本。\n当前版本：v{APP_VERSION}\n最新版本：{latest}",
+                self.t("dlg_version"),
+                self.t("version_latest", current=APP_VERSION, latest=latest),
             )
             return
 
         if status == "update":
             ret = QMessageBox.question(
                 self,
-                "发现新版本",
-                f"当前版本：v{APP_VERSION}\n最新版本：{latest}\n\n是否前往 Releases 下载更新？",
+                self.t("dlg_new_version"),
+                self.t("version_update", current=APP_VERSION, latest=latest),
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.Yes,
             )
@@ -1411,7 +1850,7 @@ class MainWindow(QMainWindow):
                 webbrowser.open(release_url)
             return
 
-        QMessageBox.warning(self, "版本检测失败", f"无法检测更新：{latest}")
+        QMessageBox.warning(self, self.t("dlg_version"), self.t("version_failed", err=latest))
 
     def _set_settings_panel_expanded(self, expanded: bool, animate: bool) -> None:
         self.settings_panel_expanded = expanded
@@ -1442,8 +1881,8 @@ class MainWindow(QMainWindow):
             self.settings_panel.setMaximumWidth(target)
 
         self.settings_content.setVisible(expanded)
-        self.settings_toggle_btn.setText("⚙ 设置" if expanded else "⚙")
-        self.settings_toggle_btn.setToolTip("收起设置" if expanded else "展开设置")
+        self.settings_toggle_btn.setText(self.t("settings_toggle") if expanded else "⚙")
+        self.settings_toggle_btn.setToolTip(self.t("settings_collapse") if expanded else self.t("settings_expand"))
         self._update_version_btn_text()
         if expanded:
             self.settings_toggle_btn.setMinimumSize(0, 40)
@@ -1560,6 +1999,10 @@ class MainWindow(QMainWindow):
                 QTabWidget#inputTabs QTabBar::tab:selected {
                     background: rgba(156, 108, 255, 0.60);
                 }
+                QScrollArea#singleScroll, QWidget#singleContainer {
+                    background: transparent;
+                    border: 0;
+                }
                 QTextEdit#urlInput, QLineEdit#pathInput, QLineEdit#urlLineInput, QSpinBox#spinBox {
                     border: 1px solid rgba(255, 255, 255, 0.24);
                     border-radius: 10px;
@@ -1595,6 +2038,18 @@ class MainWindow(QMainWindow):
                     font-weight: 600;
                 }
                 QPushButton#secondaryBtn:hover {
+                    background: rgba(255, 255, 255, 0.18);
+                }
+                QPushButton#miniBtn {
+                    border-radius: 8px;
+                    border: 1px solid rgba(255, 255, 255, 0.24);
+                    background: rgba(255, 255, 255, 0.10);
+                    color: #F2EBFF;
+                    padding: 2px 10px;
+                    font-size: 12px;
+                    font-weight: 650;
+                }
+                QPushButton#miniBtn:hover {
                     background: rgba(255, 255, 255, 0.18);
                 }
                 QPushButton#themeIconBtn {
@@ -1799,6 +2254,10 @@ class MainWindow(QMainWindow):
                 QTabWidget#inputTabs QTabBar::tab:selected {
                     background: #E5ECFA;
                 }
+                QScrollArea#singleScroll, QWidget#singleContainer {
+                    background: transparent;
+                    border: 0;
+                }
                 QTextEdit#urlInput, QLineEdit#pathInput, QLineEdit#urlLineInput, QSpinBox#spinBox {
                     border: 1px solid #C7B8F2;
                     border-radius: 10px;
@@ -1834,6 +2293,18 @@ class MainWindow(QMainWindow):
                     font-weight: 600;
                 }
                 QPushButton#secondaryBtn:hover {
+                    background: #EEF2FA;
+                }
+                QPushButton#miniBtn {
+                    border-radius: 8px;
+                    border: 1px solid #CFD5E3;
+                    background: #F8F9FC;
+                    color: #1E2532;
+                    padding: 2px 10px;
+                    font-size: 12px;
+                    font-weight: 650;
+                }
+                QPushButton#miniBtn:hover {
                     background: #EEF2FA;
                 }
                 QPushButton#themeIconBtn {
@@ -1956,7 +2427,7 @@ class MainWindow(QMainWindow):
     def _choose_output_dir(self) -> None:
         folder = QFileDialog.getExistingDirectory(
             self,
-            "选择下载目录",
+            self.t("select_output_dir"),
             self.output_dir_input.text().strip() or str(Path.cwd()),
         )
         if folder:
@@ -1972,7 +2443,7 @@ class MainWindow(QMainWindow):
 
         idx_item = QTableWidgetItem(str(task.index))
         name_item = QTableWidgetItem(task.output_path.name)
-        status_item = QTableWidgetItem("准备中")
+        status_item = QTableWidgetItem(self.t("status_waiting"))
         detail_item = QTableWidgetItem(task.url)
         idx_item.setTextAlignment(Qt.AlignCenter)
         status_item.setTextAlignment(Qt.AlignCenter)
@@ -2002,13 +2473,13 @@ class MainWindow(QMainWindow):
         action_layout.setContentsMargins(10, 6, 10, 6)
         action_layout.setSpacing(10)
 
-        pause_btn = QPushButton("暂停")
+        pause_btn = QPushButton(self.t("row_pause"))
         pause_btn.setObjectName("rowPauseBtn")
         pause_btn.setMinimumHeight(24)
         pause_btn.setFixedWidth(56)
         pause_btn.clicked.connect(lambda _, idx=task.index: self._on_row_pause_clicked(idx))
 
-        delete_btn = QPushButton("删除")
+        delete_btn = QPushButton(self.t("row_delete"))
         delete_btn.setObjectName("rowDeleteBtn")
         delete_btn.setMinimumHeight(24)
         delete_btn.setFixedWidth(56)
@@ -2026,8 +2497,7 @@ class MainWindow(QMainWindow):
         item = self.table.item(row, 2)
         if item is None:
             return
-        shown = f"  {text}  " if text == "正在下载" else text
-        item.setText(shown)
+        item.setText(text)
         item.setTextAlignment(Qt.AlignCenter)
         item.setForeground(QBrush(color))
 
@@ -2043,7 +2513,7 @@ class MainWindow(QMainWindow):
     def _append_single_input_row(self, text: str = "") -> None:
         line = QLineEdit(text)
         line.setObjectName("urlLineInput")
-        line.setPlaceholderText("https://example.com/video.m3u8")
+        line.setPlaceholderText(self.t("single_placeholder"))
         line.textChanged.connect(lambda _=None, l=line: self._on_single_input_changed(l))
         self.single_lines_layout.addWidget(line)
         self.single_url_inputs.append(line)
@@ -2065,6 +2535,21 @@ class MainWindow(QMainWindow):
         ):
             self._remove_single_input_row(self.single_url_inputs[-1])
 
+    def _on_single_remove_clicked(self) -> None:
+        if not self.single_url_inputs:
+            self._append_single_input_row()
+            return
+        if len(self.single_url_inputs) == 1:
+            self.single_url_inputs[0].clear()
+            return
+        if not self.single_url_inputs[-1].text().strip():
+            target = self.single_url_inputs[-2]
+        else:
+            target = self.single_url_inputs[-1]
+        self._remove_single_input_row(target)
+        if not self.single_url_inputs or self.single_url_inputs[-1].text().strip():
+            self._append_single_input_row()
+
     def _collect_current_entries(self) -> list[tuple[str | None, str]]:
         if self.input_tabs.currentIndex() == 0:
             entries: list[tuple[str | None, str]] = []
@@ -2080,7 +2565,7 @@ class MainWindow(QMainWindow):
         btn = self.pause_btn_by_index.get(task_index)
         if not btn:
             return
-        btn.setText("继续" if paused else "暂停")
+        btn.setText(self.t("row_resume") if paused else self.t("row_pause"))
         btn.setEnabled(enabled)
 
     def _set_pause_btn_visible(self, task_index: int, visible: bool) -> None:
@@ -2092,6 +2577,24 @@ class MainWindow(QMainWindow):
         btn = self.delete_btn_by_index.get(task_index)
         if btn:
             btn.setEnabled(enabled)
+
+    def _remove_task_row(self, task_index: int) -> None:
+        row = self.row_by_index.get(task_index)
+        if row is None:
+            return
+        self.table.removeRow(row)
+        self.row_by_index.pop(task_index, None)
+        self.progress_by_index.pop(task_index, None)
+        self.pause_btn_by_index.pop(task_index, None)
+        self.delete_btn_by_index.pop(task_index, None)
+        self.task_status_by_index.pop(task_index, None)
+        self.task_url_by_index.pop(task_index, None)
+
+        for idx, current_row in list(self.row_by_index.items()):
+            if current_row > row:
+                self.row_by_index[idx] = current_row - 1
+        if self.table.rowCount() == 0 and not self.worker:
+            self.summary_label.setText(self.t("summary_wait"))
 
     def _on_row_pause_clicked(self, task_index: int) -> None:
         if not self.worker:
@@ -2109,12 +2612,24 @@ class MainWindow(QMainWindow):
             self._set_pause_btn_state(task_index, paused=True)
 
     def _on_row_delete_clicked(self, task_index: int) -> None:
-        if not self.worker:
+        status = self.task_status_by_index.get(task_index, "waiting")
+        final_statuses = {"ok", "failed", "skipped", "deleted"}
+        if not self.worker or status in final_statuses:
+            ret = QMessageBox.question(
+                self,
+                self.t("dlg_confirm_delete"),
+                self.t("dlg_confirm_delete_row"),
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if ret == QMessageBox.Yes:
+                self._remove_task_row(task_index)
             return
+
         ret = QMessageBox.question(
             self,
-            "确认删除",
-            "确定删除这个任务吗？运行中的任务会立即中断。",
+            self.t("dlg_confirm_delete"),
+            self.t("dlg_confirm_delete_running"),
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
         )
@@ -2128,11 +2643,11 @@ class MainWindow(QMainWindow):
         if self.pause_all_active:
             self.worker.apply_command("resume_all")
             self.pause_all_active = False
-            self.pause_all_btn.setText("暂停全部")
+            self.pause_all_btn.setText(self.t("pause_all"))
         else:
             self.worker.apply_command("pause_all")
             self.pause_all_active = True
-            self.pause_all_btn.setText("继续全部")
+            self.pause_all_btn.setText(self.t("resume_all"))
 
     def _clear_table_ui(self) -> None:
         self.table.setRowCount(0)
@@ -2147,39 +2662,39 @@ class MainWindow(QMainWindow):
         if self.worker:
             ret = QMessageBox.question(
                 self,
-                "确认清空任务",
-                "确定清空所有任务吗？正在下载的任务会被中断。",
+                self.t("dlg_confirm_clear"),
+                self.t("dlg_confirm_clear_running"),
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.No,
             )
             if ret != QMessageBox.Yes:
                 return
             self.worker.apply_command("delete_all")
-            self.summary_label.setText("已请求清空任务，等待当前线程退出...")
+            self.summary_label.setText(self.t("summary_clear_requested"))
             return
 
         if self.table.rowCount() == 0:
             return
         ret = QMessageBox.question(
             self,
-            "确认清空任务",
-            "确定清空任务列表吗？",
+            self.t("dlg_confirm_clear"),
+            self.t("dlg_confirm_clear_idle"),
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
         )
         if ret == QMessageBox.Yes:
             self._clear_table_ui()
-            self.summary_label.setText("任务列表已清空")
+            self.summary_label.setText(self.t("summary_cleared"))
 
     def _prepare_tasks(self) -> tuple[list[DownloadTask], DownloadOptions, int, Path] | None:
         raw_entries = self._collect_current_entries()
         if not raw_entries:
-            QMessageBox.warning(self, "提示", "请输入至少一个 m3u8 链接。")
+            QMessageBox.warning(self, self.t("tip"), self.t("tip_need_url"))
             return None
 
         out_dir_text = self.output_dir_input.text().strip()
         if not out_dir_text:
-            QMessageBox.warning(self, "提示", "请先选择下载目录。")
+            QMessageBox.warning(self, self.t("tip"), self.t("tip_need_dir"))
             return None
 
         output_dir = Path(out_dir_text).expanduser().resolve()
@@ -2188,7 +2703,7 @@ class MainWindow(QMainWindow):
         try:
             ffmpeg = check_ffmpeg_bin("ffmpeg")
         except Exception as exc:
-            QMessageBox.critical(self, "ffmpeg 未找到", str(exc))
+            QMessageBox.critical(self, self.t("ffmpeg_missing"), str(exc))
             return None
 
         options = DownloadOptions(
@@ -2210,12 +2725,12 @@ class MainWindow(QMainWindow):
 
     def _append_tasks_while_running(self) -> None:
         if not self.worker or not self.worker_thread or not self.worker_thread.isRunning():
-            QMessageBox.information(self, "提示", "当前没有运行中的任务，请使用“开始下载”。")
+            QMessageBox.information(self, self.t("tip"), self.t("tip_no_running"))
             return
 
         raw_entries = self._collect_current_entries()
         if not raw_entries:
-            QMessageBox.warning(self, "提示", "请输入要继续添加的链接。")
+            QMessageBox.warning(self, self.t("tip"), self.t("tip_need_more"))
             return
 
         output_dir = Path(self.output_dir_input.text().strip()).expanduser().resolve()
@@ -2235,8 +2750,8 @@ class MainWindow(QMainWindow):
         if not filtered:
             QMessageBox.information(
                 self,
-                "提示",
-                "没有可添加的新任务（可能都重复或格式无效）。",
+                self.t("tip"),
+                self.t("tip_no_new"),
             )
             return
 
@@ -2259,7 +2774,7 @@ class MainWindow(QMainWindow):
         if added > 0:
             self.pause_all_btn.setEnabled(True)
             self.add_more_btn.setEnabled(True)
-            self.summary_label.setText(f"已新增 {added} 个任务")
+            self.summary_label.setText(self.t("summary_added", count=added))
 
     def _start_download(self) -> None:
         prepared = self._prepare_tasks()
@@ -2269,14 +2784,14 @@ class MainWindow(QMainWindow):
 
         self._clear_table_ui()
         self.pause_all_active = False
-        self.pause_all_btn.setText("暂停全部")
+        self.pause_all_btn.setText(self.t("pause_all"))
         self.pause_all_btn.setEnabled(True)
         self.clear_tasks_btn.setEnabled(True)
 
         for task in tasks:
             self._add_table_row(task)
 
-        self.summary_label.setText(f"任务 {len(tasks)} 条，准备开始...")
+        self.summary_label.setText(self.t("summary_preparing", count=len(tasks)))
         self.start_btn.setEnabled(False)
         self.add_more_btn.setEnabled(True)
 
@@ -2305,20 +2820,21 @@ class MainWindow(QMainWindow):
         detail_item = self.table.item(row, 4)
 
         if status == "stage":
+            localized_detail = self._localize_detail(detail)
             if "下载中" in detail:
                 self._set_status(
                     row,
-                    "正在下载",
+                    self.t("status_downloading"),
                     QColor("#42A5F5") if self.current_theme == "light" else QColor("#9CC8FF"),
                 )
             else:
                 self._set_status(
                     row,
-                    detail,
+                    localized_detail,
                     QColor("#42A5F5") if self.current_theme == "light" else QColor("#9CC8FF"),
                 )
             if detail_item:
-                detail_item.setText(detail)
+                detail_item.setText(localized_detail)
             self._set_pause_btn_state(task_index, paused=False)
             self._set_pause_btn_visible(task_index, True)
             return
@@ -2327,7 +2843,7 @@ class MainWindow(QMainWindow):
             if progress < 0:
                 if bar.maximum() != 0:
                     bar.setRange(0, 0)
-                    bar.setFormat("加载中...")
+                    bar.setFormat(self.t("progress_loading"))
             else:
                 if bar.maximum() == 0:
                     bar.setRange(0, 100)
@@ -2336,99 +2852,123 @@ class MainWindow(QMainWindow):
             return
 
         if status == "running":
-            self._set_status(row, "准备中", QColor("#3E63DD") if self.current_theme == "light" else QColor("#A7C5FF"))
+            self._set_status(
+                row,
+                self.t("status_waiting"),
+                QColor("#3E63DD") if self.current_theme == "light" else QColor("#A7C5FF"),
+            )
             self._set_pause_btn_state(task_index, paused=False)
             self._set_pause_btn_visible(task_index, True)
             self._set_delete_btn_enabled(task_index, True)
             if detail_item:
-                detail_item.setText(detail)
+                detail_item.setText(self._localize_detail(detail))
             return
 
         if status == "ok":
-            self._set_status(row, "已完成", QColor("#1F8F4D") if self.current_theme == "light" else QColor("#86E3A8"))
+            self._set_status(
+                row,
+                self.t("status_done"),
+                QColor("#1F8F4D") if self.current_theme == "light" else QColor("#86E3A8"),
+            )
             self._set_pause_btn_state(task_index, paused=False, enabled=False)
             self._set_pause_btn_visible(task_index, False)
-            self._set_delete_btn_enabled(task_index, False)
+            self._set_delete_btn_enabled(task_index, True)
             if bar:
                 if bar.maximum() == 0:
                     bar.setRange(0, 100)
                 bar.setFormat("100%")
                 self._animate_progress(bar, 100)
             if detail_item:
-                detail_item.setText(detail)
+                detail_item.setText(self._localize_detail(detail))
             return
 
         if status == "skipped":
-            self._set_status(row, "已跳过", QColor("#AD6E00") if self.current_theme == "light" else QColor("#FFD287"))
+            self._set_status(
+                row,
+                self.t("status_skipped"),
+                QColor("#AD6E00") if self.current_theme == "light" else QColor("#FFD287"),
+            )
             self._set_pause_btn_state(task_index, paused=False, enabled=False)
             self._set_pause_btn_visible(task_index, False)
-            self._set_delete_btn_enabled(task_index, False)
+            self._set_delete_btn_enabled(task_index, True)
             if bar:
                 bar.setRange(0, 100)
                 bar.setValue(100)
                 bar.setFormat("100%")
             if detail_item:
-                detail_item.setText(detail)
+                detail_item.setText(self._localize_detail(detail))
             return
 
         if status == "paused":
-            self._set_status(row, "已暂停", QColor("#A37200") if self.current_theme == "light" else QColor("#FFD287"))
+            self._set_status(
+                row,
+                self.t("status_paused"),
+                QColor("#A37200") if self.current_theme == "light" else QColor("#FFD287"),
+            )
             self._set_pause_btn_state(task_index, paused=True)
             self._set_pause_btn_visible(task_index, True)
             if bar and bar.maximum() == 0:
                 bar.setRange(0, 100)
                 bar.setValue(0)
-                bar.setFormat("暂停")
+                bar.setFormat(self.t("progress_paused"))
             if detail_item:
-                detail_item.setText(detail)
+                detail_item.setText(self._localize_detail(detail))
             return
 
         if status == "deleted":
-            self._set_status(row, "已删除", QColor("#C62828") if self.current_theme == "light" else QColor("#FF9A9A"))
+            self._set_status(
+                row,
+                self.t("status_deleted"),
+                QColor("#C62828") if self.current_theme == "light" else QColor("#FF9A9A"),
+            )
             self._set_pause_btn_state(task_index, paused=False, enabled=False)
             self._set_pause_btn_visible(task_index, False)
-            self._set_delete_btn_enabled(task_index, False)
+            self._set_delete_btn_enabled(task_index, True)
             if bar:
                 bar.setRange(0, 100)
                 bar.setValue(0)
-                bar.setFormat("已删")
+                bar.setFormat(self.t("progress_deleted"))
             if detail_item:
-                detail_item.setText(detail)
+                detail_item.setText(self._localize_detail(detail))
             return
 
         if status == "failed":
-            self._set_status(row, "下载失败", QColor("#C62828") if self.current_theme == "light" else QColor("#FF9A9A"))
+            self._set_status(
+                row,
+                self.t("status_failed"),
+                QColor("#C62828") if self.current_theme == "light" else QColor("#FF9A9A"),
+            )
             self._set_pause_btn_state(task_index, paused=False, enabled=False)
             self._set_pause_btn_visible(task_index, False)
-            self._set_delete_btn_enabled(task_index, False)
+            self._set_delete_btn_enabled(task_index, True)
             if bar:
                 bar.setRange(0, 100)
                 bar.setValue(0)
-                bar.setFormat("失败")
+                bar.setFormat(self.t("progress_failed"))
             if detail_item:
-                detail_item.setText(detail)
+                detail_item.setText(self._localize_detail(detail))
             return
 
     @Slot(int, int, int, str)
     def _on_batch_done(self, success: int, skipped: int, failed: int, failure_file: str) -> None:
         self.pause_all_active = False
-        self.pause_all_btn.setText("暂停全部")
-        text = f"完成：成功 {success} | 跳过 {skipped} | 失败 {failed}"
+        self.pause_all_btn.setText(self.t("pause_all"))
+        text = self.t("summary_done", success=success, skipped=skipped, failed=failed)
         if failure_file:
-            text += f" | 失败清单：{failure_file}"
+            text += self.t("summary_done_file", file=failure_file)
         self.summary_label.setText(text)
 
         if failed > 0:
             QMessageBox.warning(
                 self,
-                "任务完成",
-                f"成功 {success}，跳过 {skipped}，失败 {failed}。\n失败清单已导出：\n{failure_file}",
+                self.t("dlg_batch_done"),
+                self.t("dlg_batch_done_fail", success=success, skipped=skipped, failed=failed, file=failure_file),
             )
         else:
             QMessageBox.information(
                 self,
-                "任务完成",
-                f"全部完成。成功 {success}，跳过 {skipped}。",
+                self.t("dlg_batch_done"),
+                self.t("dlg_batch_done_ok", success=success, skipped=skipped),
             )
 
     @Slot()
@@ -2436,6 +2976,7 @@ class MainWindow(QMainWindow):
         self.start_btn.setEnabled(True)
         self.pause_all_btn.setEnabled(False)
         self.add_more_btn.setEnabled(False)
+        self.pause_all_btn.setText(self.t("pause_all"))
         self.worker = None
         self.worker_thread = None
 

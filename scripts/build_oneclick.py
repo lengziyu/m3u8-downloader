@@ -19,6 +19,19 @@ PIP_TRUSTED_HOSTS = ["pypi.org", "files.pythonhosted.org", "pypi.python.org"]
 PIP_INSTALL_FLAGS = ["--default-timeout", "120", "--retries", "10"]
 
 
+def read_project_version(default: str = "1.0.0") -> str:
+    version_file = ROOT / "VERSION"
+    if not version_file.exists():
+        return default
+    try:
+        line = (version_file.read_text(encoding="utf-8").splitlines() or [default])[0].strip()
+    except Exception:
+        return default
+    if not line:
+        return default
+    return line[1:] if line.lower().startswith("v") else line
+
+
 def run_cmd(cmd: list[str], env: dict[str, str] | None = None) -> None:
     print(f"$ {' '.join(cmd)}")
     subprocess.run(cmd, cwd=ROOT, check=True, env=env)
@@ -196,7 +209,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--app-version",
-        default=os.environ.get("M3U8_DOWNLOADER_APP_VERSION", "1.0.0"),
+        default=os.environ.get("M3U8_DOWNLOADER_APP_VERSION", read_project_version()),
         help="写入客户端的版本号（用于应用内更新检测显示）",
     )
     return parser.parse_args()
