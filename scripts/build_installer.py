@@ -85,7 +85,7 @@ Name: "chinesesimp"; MessagesFile: "compiler:Languages\\ChineseSimplified.isl"
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
-Name: "desktopicon"; Description: "创建桌面图标"; GroupDescription: "附加任务:"
+Name: "desktopicon"; Description: "Create a desktop icon"; GroupDescription: "Additional tasks:"
 
 [Files]
 Source: "{app_exe}"; DestDir: "{{app}}"; Flags: ignoreversion
@@ -95,11 +95,12 @@ Name: "{{autoprograms}}\\{APP_NAME}"; Filename: "{{app}}\\{APP_NAME}.exe"
 Name: "{{autodesktop}}\\{APP_NAME}"; Filename: "{{app}}\\{APP_NAME}.exe"; Tasks: desktopicon
 
 [Run]
-Filename: "{{app}}\\{APP_NAME}.exe"; Description: "启动 {APP_NAME}"; Flags: nowait postinstall skipifsilent
+Filename: "{{app}}\\{APP_NAME}.exe"; Description: "Launch {APP_NAME}"; Flags: nowait postinstall skipifsilent
 """
     with tempfile.TemporaryDirectory() as td:
         iss_file = Path(td) / "installer.iss"
-        iss_file.write_text(iss_content.strip() + "\n", encoding="utf-8")
+        # Inno Setup reliably handles UTF-8 text when BOM is present.
+        iss_file.write_text(iss_content.strip() + "\n", encoding="utf-8-sig")
         run_cmd([iscc, str(iss_file)])
 
     return DIST_DIR / f"{APP_NAME}-Setup.exe"

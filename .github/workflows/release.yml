@@ -27,13 +27,42 @@ jobs:
         run: choco install ffmpeg -y
 
       - name: Build Windows Installer
-        run: python scripts/build_installer.py --version ${{ github.ref_name }}
+        id: win_build
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          python scripts/build_installer.py --version ${{ github.ref_name }} *>&1 | Tee-Object -FilePath windows-build.log
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "build installer failed with exit code $LASTEXITCODE"
+            exit $LASTEXITCODE
+          }
 
       - name: Upload Windows Artifact
+        if: ${{ steps.win_build.outcome == 'success' }}
         uses: actions/upload-artifact@v4
         with:
           name: windows-installer
           path: dist/M3U8-Downloader-Setup.exe
+
+      - name: Upload Windows Portable Artifact
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-portable
+          path: dist/M3U8-Downloader.exe
+          if-no-files-found: ignore
+
+      - name: Upload Windows Build Log
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-build-log
+          path: windows-build.log
+          if-no-files-found: ignore
+
+      - name: Fail Job If Installer Build Failed
+        if: ${{ steps.win_build.outcome != 'success' }}
+        run: exit 1
 
   build_macos:
     runs-on: macos-latest
@@ -74,6 +103,14 @@ jobs:
           name: windows-installer
           path: release-assets/windows-installer
 
+      - name: Download Windows Portable Artifact
+        if: ${{ always() }}
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-portable
+          path: release-assets/windows-portable
+
       - name: Download macOS Artifacts
         if: ${{ needs.build_macos.result == 'success' }}
         uses: actions/download-artifact@v4
@@ -87,5 +124,6 @@ jobs:
           fail_on_unmatched_files: false
           files: |
             release-assets/windows-installer/M3U8-Downloader-Setup.exe
+            release-assets/windows-portable/M3U8-Downloader.exe
             release-assets/macos-installers/M3U8-Downloader-Installer.pkg
             release-assets/macos-installers/M3U8-Downloader-Installer.dmg
