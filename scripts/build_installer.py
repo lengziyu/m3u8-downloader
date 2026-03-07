@@ -12,7 +12,9 @@ from pathlib import Path
 
 
 APP_NAME = "M3U8-Downloader"
-APP_ID = "com.lens.m3u8downloader"
+MAC_APP_ID = "com.lens.m3u8downloader"
+# Inno Setup AppId should use GUID form (escaped with double '{{' in iss).
+WIN_APP_ID = "{{8A8D3E35-2D02-4D88-A8D0-4D1D6D2F7C31}"
 ROOT = Path(__file__).resolve().parent.parent
 DIST_DIR = ROOT / "dist"
 
@@ -67,7 +69,7 @@ def build_windows_installer(version: str) -> Path:
     iscc = find_iscc()
     iss_content = f"""
 [Setup]
-AppId={APP_ID}
+AppId={WIN_APP_ID}
 AppName={APP_NAME}
 AppVersion={version}
 DefaultDirName={{{{autopf}}}}\\{APP_NAME}
@@ -123,7 +125,7 @@ def build_macos_installer(version: str) -> tuple[Path, Path]:
         [
             "pkgbuild",
             "--identifier",
-            APP_ID,
+            MAC_APP_ID,
             "--version",
             version,
             "--install-location",

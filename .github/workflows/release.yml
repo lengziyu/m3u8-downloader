@@ -38,11 +38,12 @@ jobs:
           }
 
       - name: Upload Windows Artifact
-        if: ${{ steps.win_build.outcome == 'success' }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
           name: windows-installer
           path: dist/M3U8-Downloader-Setup.exe
+          if-no-files-found: ignore
 
       - name: Upload Windows Portable Artifact
         if: ${{ always() }}
@@ -97,7 +98,8 @@ jobs:
     if: ${{ always() && (needs.build_windows.result == 'success' || needs.build_macos.result == 'success') }}
     steps:
       - name: Download Windows Artifact
-        if: ${{ needs.build_windows.result == 'success' }}
+        if: ${{ always() }}
+        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           name: windows-installer
@@ -110,6 +112,14 @@ jobs:
         with:
           name: windows-portable
           path: release-assets/windows-portable
+
+      - name: Download Windows Build Log
+        if: ${{ always() }}
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-build-log
+          path: release-assets/windows-build-log
 
       - name: Download macOS Artifacts
         if: ${{ needs.build_macos.result == 'success' }}
@@ -125,5 +135,6 @@ jobs:
           files: |
             release-assets/windows-installer/M3U8-Downloader-Setup.exe
             release-assets/windows-portable/M3U8-Downloader.exe
+            release-assets/windows-build-log/windows-build.log
             release-assets/macos-installers/M3U8-Downloader-Installer.pkg
             release-assets/macos-installers/M3U8-Downloader-Installer.dmg
