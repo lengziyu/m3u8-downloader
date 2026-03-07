@@ -24,7 +24,7 @@ def run_cmd(cmd: list[str]) -> None:
     subprocess.run(cmd, cwd=ROOT, check=True)
 
 
-def run_build_oneclick(args: argparse.Namespace) -> None:
+def run_build_oneclick(args: argparse.Namespace, app_version: str) -> None:
     cmd = [args.python, "scripts/build_oneclick.py"]
     if args.skip_install:
         cmd.append("--skip-install")
@@ -34,6 +34,7 @@ def run_build_oneclick(args: argparse.Namespace) -> None:
         cmd.append("--no-bundle-ffmpeg")
     if args.index_url:
         cmd.extend(["--index-url", args.index_url])
+    cmd.extend(["--app-version", app_version])
     run_cmd(cmd)
 
 
@@ -163,6 +164,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--python", default=sys.executable, help="构建用 Python")
     parser.add_argument("--version", default="1.0.0", help="安装器版本号")
+    parser.add_argument("--app-version", default=None, help="客户端版本号（默认跟随 --version）")
     parser.add_argument("--skip-build", action="store_true", help="跳过基础应用构建")
     parser.add_argument("--skip-install", action="store_true", help="传递给 build_oneclick.py")
     parser.add_argument("--no-venv", action="store_true", help="传递给 build_oneclick.py")
@@ -185,9 +187,10 @@ def main() -> int:
         print(f"Platform: {platform.system()}")
 
         version = normalize_installer_version(args.version)
+        app_version = normalize_installer_version(args.app_version or args.version)
 
         if not args.skip_build:
-            run_build_oneclick(args)
+            run_build_oneclick(args, app_version)
 
         if system_name == "windows":
             setup_exe = build_windows_installer(version)

@@ -8,6 +8,7 @@ import os
 import queue
 import re
 import shutil
+import ssl
 import subprocess
 import sys
 import threading
@@ -32,7 +33,7 @@ from PySide6.QtCore import (
     Signal,
     Slot,
 )
-from PySide6.QtGui import QBrush, QColor, QFont, QIcon, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap
+from PySide6.QtGui import QBrush, QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -63,7 +64,9 @@ DEFAULT_USER_AGENT = (
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
 )
 APP_DISPLAY_NAME = "M3U8-Downloader"
-APP_VERSION = "1.0.0"
+APP_VERSION = os.environ.get("M3U8_DOWNLOADER_APP_VERSION", "1.0.0").strip()
+if APP_VERSION.lower().startswith("v"):
+    APP_VERSION = APP_VERSION[1:]
 GITHUB_REPO = os.environ.get("M3U8_DOWNLOADER_GITHUB_REPO", "lengziyu/m3u8-downloader")
 
 
@@ -161,33 +164,27 @@ def create_app_icon(size: int = 256) -> QIcon:
     painter = QPainter(pix)
     painter.setRenderHint(QPainter.Antialiasing)
 
-    grad = QLinearGradient(0, 0, size, size)
-    grad.setColorAt(0.0, QColor("#7B43FF"))
-    grad.setColorAt(1.0, QColor("#B37BFF"))
     card = QPainterPath()
-    card.addRoundedRect(QRectF(6, 6, size - 12, size - 12), 54, 54)
-    painter.fillPath(card, grad)
+    card.addRoundedRect(QRectF(6, 6, size - 12, size - 12), 46, 46)
+    painter.fillPath(card, QColor("#8A5BFF"))
 
     painter.setPen(Qt.NoPen)
     painter.setBrush(QColor("#FFFFFF"))
-    shaft_w = size * 0.12
-    shaft_h = size * 0.28
+    shaft_w = size * 0.10
+    shaft_h = size * 0.25
     shaft_x = (size - shaft_w) / 2
-    shaft_y = size * 0.28
-    painter.drawRoundedRect(QRectF(shaft_x, shaft_y, shaft_w, shaft_h), 12, 12)
+    shaft_y = size * 0.30
+    painter.drawRoundedRect(QRectF(shaft_x, shaft_y, shaft_w, shaft_h), 10, 10)
 
     arrow = QPainterPath()
-    arrow.moveTo(size * 0.33, size * 0.51)
-    arrow.lineTo(size * 0.5, size * 0.72)
-    arrow.lineTo(size * 0.67, size * 0.51)
+    arrow.moveTo(size * 0.34, size * 0.52)
+    arrow.lineTo(size * 0.5, size * 0.70)
+    arrow.lineTo(size * 0.66, size * 0.52)
     arrow.closeSubpath()
     painter.fillPath(arrow, QColor("#FFFFFF"))
 
-    painter.setPen(QPen(QColor("#FFFFFF"), max(5, size // 30)))
-    painter.drawLine(int(size * 0.22), int(size * 0.80), int(size * 0.78), int(size * 0.80))
-
-    painter.setFont(QFont("Arial", max(16, size // 8), QFont.Bold))
-    painter.drawText(QRectF(0, size * 0.06, size, size * 0.18), Qt.AlignCenter, "M3U8")
+    painter.setPen(QPen(QColor("#FFFFFF"), max(6, size // 28)))
+    painter.drawLine(int(size * 0.28), int(size * 0.78), int(size * 0.72), int(size * 0.78))
     painter.end()
     return QIcon(pix)
 
@@ -232,22 +229,59 @@ def is_newer_version(current: str, latest: str) -> bool:
     return lat_pad > cur_pad
 
 
-def fetch_latest_release(repo: str) -> tuple[str, str]:
-    api_url = f"https://api.github.com/repos/{repo}/releases/latest"
+def _github_json_get(url: str) -> object:
     req = urllib.request.Request(
-        api_url,
+        url,
         headers={
             "Accept": "application/vnd.github+json",
             "User-Agent": APP_DISPLAY_NAME,
         },
     )
-    with urllib.request.urlopen(req, timeout=12) as resp:
-        payload = json.loads(resp.read().decode("utf-8", errors="replace"))
-    tag = str(payload.get("tag_name") or payload.get("name") or "").strip()
-    html_url = str(payload.get("html_url") or f"https://github.com/{repo}/releases").strip()
-    if not tag:
-        raise RuntimeError("未读取到 release tag_name。")
-    return tag, html_url
+    try:
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            return json.loads(resp.read().decode("utf-8", errors="replace"))
+    except urllib.error.URLError as exc:
+        # Some local Python environments miss CA bundles.
+        reason = getattr(exc, "reason", None)
+        if isinstance(reason, ssl.SSLCertVerificationError):
+            insecure_ctx = ssl.create_default_context()
+            insecure_ctx.check_hostname = False
+            insecure_ctx.verify_mode = ssl.CERT_NONE
+            with urllib.request.urlopen(req, timeout=12, context=insecure_ctx) as resp:
+                return json.loads(resp.read().decode("utf-8", errors="replace"))
+        raise
+
+
+def fetch_latest_version(repo: str) -> tuple[str, str]:
+    releases_url = f"https://github.com/{repo}/releases"
+
+    # Prefer official latest release.
+    try:
+        payload = _github_json_get(f"https://api.github.com/repos/{repo}/releases/latest")
+        if isinstance(payload, dict):
+            tag = str(payload.get("tag_name") or payload.get("name") or "").strip()
+            html_url = str(payload.get("html_url") or releases_url).strip() or releases_url
+            if tag:
+                return tag, html_url
+    except urllib.error.HTTPError as exc:
+        if exc.code not in {403, 404}:
+            raise
+    except Exception:
+        pass
+
+    # Fallback to tags when release is missing or inaccessible.
+    payload = _github_json_get(f"https://api.github.com/repos/{repo}/tags?per_page=100")
+    if not isinstance(payload, list):
+        raise RuntimeError("读取 tag 列表失败。")
+
+    tags = [str(item.get("name") or "").strip() for item in payload if isinstance(item, dict)]
+    tags = [tag for tag in tags if tag]
+    if not tags:
+        raise RuntimeError("未读取到任何 release/tag。")
+
+    valid_semver_tags = [tag for tag in tags if parse_version(tag)]
+    latest_tag = max(valid_semver_tags, key=parse_version) if valid_semver_tags else tags[0]
+    return latest_tag, releases_url
 
 
 def _candidate_binary_names(name: str) -> list[str]:
@@ -1025,12 +1059,37 @@ class MainWindow(QMainWindow):
         self.retries_input.setRange(0, 10)
         self.retries_input.setValue(2)
         self.retries_input.setObjectName("spinBox")
+        self.retries_input.setButtonSymbols(QSpinBox.NoButtons)
         self.retries_input.setAlignment(Qt.AlignCenter)
+
+        self.retries_minus_btn = QPushButton("−")
+        self.retries_minus_btn.setObjectName("stepBtn")
+        self.retries_minus_btn.setFixedSize(34, 34)
+        self.retries_minus_btn.clicked.connect(
+            lambda: self.retries_input.setValue(
+                max(self.retries_input.minimum(), self.retries_input.value() - 1)
+            )
+        )
+
+        self.retries_plus_btn = QPushButton("+")
+        self.retries_plus_btn.setObjectName("stepBtn")
+        self.retries_plus_btn.setFixedSize(34, 34)
+        self.retries_plus_btn.clicked.connect(
+            lambda: self.retries_input.setValue(
+                min(self.retries_input.maximum(), self.retries_input.value() + 1)
+            )
+        )
+
+        retries_row = QHBoxLayout()
+        retries_row.setSpacing(8)
+        retries_row.addWidget(self.retries_minus_btn)
+        retries_row.addWidget(self.retries_input, 1)
+        retries_row.addWidget(self.retries_plus_btn)
 
         settings_content_layout.addWidget(jobs_label)
         settings_content_layout.addLayout(jobs_row)
         settings_content_layout.addWidget(retries_label)
-        settings_content_layout.addWidget(self.retries_input)
+        settings_content_layout.addLayout(retries_row)
         settings_content_layout.addStretch(1)
         settings_layout.addWidget(self.settings_content, 1)
 
@@ -1087,7 +1146,7 @@ class MainWindow(QMainWindow):
         single_layout.setSpacing(8)
 
         single_hint = QLabel("逐条输入：每个输入框一个链接，填完会自动新增下一行")
-        single_hint.setObjectName("subtitleLabel")
+        single_hint.setObjectName("inputHintLabel")
         single_layout.addWidget(single_hint)
 
         self.single_scroll = QScrollArea()
@@ -1112,7 +1171,7 @@ class MainWindow(QMainWindow):
         batch_layout.setSpacing(8)
 
         batch_hint = QLabel("批量文本：支持多行，也支持一行用 | 分隔多个链接")
-        batch_hint.setObjectName("subtitleLabel")
+        batch_hint.setObjectName("inputHintLabel")
         self.url_input = QTextEdit()
         self.url_input.setObjectName("urlInput")
         self.url_input.setPlaceholderText(
@@ -1259,7 +1318,7 @@ class MainWindow(QMainWindow):
 
         def worker() -> None:
             try:
-                latest, release_url = fetch_latest_release(GITHUB_REPO)
+                latest, release_url = fetch_latest_version(GITHUB_REPO)
                 if is_newer_version(APP_VERSION, latest):
                     self.update_check_done.emit("update", latest, release_url)
                 else:
@@ -1411,6 +1470,10 @@ class MainWindow(QMainWindow):
                 QLabel#subtitleLabel {
                     color: #EFE9FF;
                     font-size: 13px;
+                }
+                QLabel#inputHintLabel {
+                    color: #E7DAFF;
+                    font-size: 12px;
                 }
                 QLabel#sectionTitle {
                     color: #EEE5FF;
@@ -1643,6 +1706,11 @@ class MainWindow(QMainWindow):
                     color: #F4EDFF;
                     font-size: 13px;
                 }
+                QLabel#inputHintLabel {
+                    color: #30384A;
+                    font-size: 12px;
+                    font-weight: 600;
+                }
                 QLabel#sectionTitle {
                     color: #1F2430;
                     font-size: 16px;
@@ -1674,12 +1742,12 @@ class MainWindow(QMainWindow):
                     background: #E5ECFA;
                 }
                 QTextEdit#urlInput, QLineEdit#pathInput, QLineEdit#urlLineInput, QSpinBox#spinBox {
-                    border: 1px solid #CFD5E3;
+                    border: 1px solid #C7B8F2;
                     border-radius: 10px;
-                    background: #FFFFFF;
-                    color: #1F2430;
+                    background: #F2ECFF;
+                    color: #251F34;
                     padding: 10px;
-                    selection-background-color: #BFA3FF;
+                    selection-background-color: #A77BFF;
                 }
                 QSpinBox#spinBox {
                     min-width: 74px;

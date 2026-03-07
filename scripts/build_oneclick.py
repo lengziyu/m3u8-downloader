@@ -19,9 +19,9 @@ PIP_TRUSTED_HOSTS = ["pypi.org", "files.pythonhosted.org", "pypi.python.org"]
 PIP_INSTALL_FLAGS = ["--default-timeout", "120", "--retries", "10"]
 
 
-def run_cmd(cmd: list[str]) -> None:
+def run_cmd(cmd: list[str], env: dict[str, str] | None = None) -> None:
     print(f"$ {' '.join(cmd)}")
-    subprocess.run(cmd, cwd=ROOT, check=True)
+    subprocess.run(cmd, cwd=ROOT, check=True, env=env)
 
 
 def add_binary_args(binary_path: str) -> list[str]:
@@ -75,6 +75,7 @@ def install_deps(python_bin: str, index_url: str | None) -> None:
 def build_app(
     python_bin: str,
     bundle_ffmpeg: bool,
+    app_version: str,
 ) -> tuple[Path, str]:
     system_name = platform.system().lower()
     is_windows = system_name == "windows"
@@ -105,7 +106,13 @@ def build_app(
             bundled_items.append(f"ffprobe={ffprobe}")
 
     cmd.append("m3u8_gui.py")
-    run_cmd(cmd)
+
+    build_env = os.environ.copy()
+    version_text = app_version.strip() or "1.0.0"
+    if version_text.lower().startswith("v"):
+        version_text = version_text[1:]
+    build_env["M3U8_DOWNLOADER_APP_VERSION"] = version_text
+    run_cmd(cmd, env=build_env)
 
     if is_windows:
         return DIST_DIR / f"{APP_NAME}.exe", ", ".join(bundled_items) or "none"
@@ -167,6 +174,11 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="可选：指定 pip 源，例如 https://pypi.tuna.tsinghua.edu.cn/simple",
     )
+    parser.add_argument(
+        "--app-version",
+        default=os.environ.get("M3U8_DOWNLOADER_APP_VERSION", "1.0.0"),
+        help="写入客户端的版本号（用于应用内更新检测显示）",
+    )
     return parser.parse_args()
 
 
@@ -220,6 +232,7 @@ def main() -> int:
 
         print(f"Python: {args.python}")
         print(f"Build Python: {build_python}")
+        print(f"App Version: {args.app_version}")
 
         if not args.skip_install:
             install_deps(build_python, args.index_url)
@@ -228,6 +241,7 @@ def main() -> int:
         artifact, bundled = build_app(
             python_bin=build_python,
             bundle_ffmpeg=not args.no_bundle_ffmpeg,
+            app_version=args.app_version,
         )
         print(f"Bundled binaries: {bundled}")
 
