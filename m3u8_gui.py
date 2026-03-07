@@ -88,6 +88,7 @@ class DownloadOptions:
     referer: str | None
     headers: list[str]
     transcode_on_fail: bool
+    validate_after_copy: bool
 
 
 def sanitize_filename(name: str) -> str:
@@ -603,6 +604,13 @@ def download_single_task(
 
     duration = probe_duration_seconds(task.url, options)
 
+    def cleanup_partial_output() -> None:
+        try:
+            if task.output_path.exists():
+                task.output_path.unlink()
+        except OSError:
+            pass
+
     copy_args = [
         "-c",
         "copy",
@@ -639,12 +647,17 @@ def download_single_task(
         if should_abort:
             abort_status = should_abort()
             if abort_status:
+                cleanup_partial_output()
                 return abort_status, "任务已中断"
         on_stage(f"下载中（尝试 {attempt}/{total_attempts}）")
         ok, err = run_ffmpeg_with_progress(
             task, options, copy_args, duration, on_progress, should_abort
         )
         if ok:
+            if not options.validate_after_copy:
+                on_progress(100)
+                return "ok", None
+
             on_stage("校验文件")
             media_ok, media_reason = validate_output_media(task.output_path, options)
             if media_ok:
@@ -672,6 +685,7 @@ def download_single_task(
                 return "failed", f"copy 成功但文件异常({media_reason}); 转码失败: {err2 or 'unknown'}"
             return "failed", f"copy 成功但文件异常: {media_reason or 'unknown'}"
         if err and err.startswith("__ABORT__:"):
+            cleanup_partial_output()
             return err.split(":", 1)[1], "任务已中断"
 
         last_error = f"copy 失败: {err or 'unknown'}"
@@ -685,6 +699,7 @@ def download_single_task(
                 on_progress(100)
                 return "ok", "copy 失败，已自动转码"
             if err2 and err2.startswith("__ABORT__:"):
+                cleanup_partial_output()
                 return err2.split(":", 1)[1], "任务已中断"
             last_error = f"{last_error}; transcode 失败: {err2 or 'unknown'}"
 
@@ -1167,7 +1182,7 @@ class MainWindow(QMainWindow):
 
         batch_tab = QWidget()
         batch_layout = QVBoxLayout(batch_tab)
-        batch_layout.setContentsMargins(6, 8, 6, 6)
+        batch_layout.setContentsMargins(6, 8, 6, 10)
         batch_layout.setSpacing(8)
 
         batch_hint = QLabel("批量文本：支持多行，也支持一行用 | 分隔多个链接")
@@ -1185,6 +1200,7 @@ class MainWindow(QMainWindow):
         self.url_input.setMinimumHeight(140)
         batch_layout.addWidget(batch_hint)
         batch_layout.addWidget(self.url_input, 1)
+        batch_layout.addSpacing(2)
 
         self.input_tabs.addTab(single_tab, "逐条输入")
         self.input_tabs.addTab(batch_tab, "批量文本")
@@ -1513,6 +1529,9 @@ class MainWindow(QMainWindow):
                     padding: 10px;
                     selection-background-color: #9E73FF;
                 }
+                QTextEdit#urlInput {
+                    padding-bottom: 14px;
+                }
                 QSpinBox#spinBox {
                     min-width: 74px;
                     padding: 8px 6px;
@@ -1749,6 +1768,9 @@ class MainWindow(QMainWindow):
                     padding: 10px;
                     selection-background-color: #A77BFF;
                 }
+                QTextEdit#urlInput {
+                    padding-bottom: 14px;
+                }
                 QSpinBox#spinBox {
                     min-width: 74px;
                     padding: 8px 6px;
@@ -1944,15 +1966,19 @@ class MainWindow(QMainWindow):
         pause_btn = QPushButton("暂停")
         pause_btn.setObjectName("rowPauseBtn")
         pause_btn.setMinimumHeight(24)
+        pause_btn.setFixedWidth(56)
         pause_btn.clicked.connect(lambda _, idx=task.index: self._on_row_pause_clicked(idx))
 
         delete_btn = QPushButton("删除")
         delete_btn.setObjectName("rowDeleteBtn")
         delete_btn.setMinimumHeight(24)
+        delete_btn.setFixedWidth(56)
         delete_btn.clicked.connect(lambda _, idx=task.index: self._on_row_delete_clicked(idx))
 
+        action_layout.addStretch(1)
         action_layout.addWidget(pause_btn)
         action_layout.addWidget(delete_btn)
+        action_layout.addStretch(1)
         self.table.setCellWidget(row, 5, action_wrap)
         self.pause_btn_by_index[task.index] = pause_btn
         self.delete_btn_by_index[task.index] = delete_btn
@@ -2136,6 +2162,7 @@ class MainWindow(QMainWindow):
             referer=None,
             headers=[],
             transcode_on_fail=True,
+            validate_after_copy=False,
         )
 
         tasks = build_tasks(raw_entries, output_dir)
