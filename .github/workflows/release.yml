@@ -65,15 +65,26 @@ jobs:
     needs:
       - build_windows
       - build_macos
+    if: ${{ always() && (needs.build_windows.result == 'success' || needs.build_macos.result == 'success') }}
     steps:
-      - name: Download Artifacts
+      - name: Download Windows Artifact
+        if: ${{ needs.build_windows.result == 'success' }}
         uses: actions/download-artifact@v4
         with:
-          path: release-assets
+          name: windows-installer
+          path: release-assets/windows-installer
+
+      - name: Download macOS Artifacts
+        if: ${{ needs.build_macos.result == 'success' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-installers
+          path: release-assets/macos-installers
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          fail_on_unmatched_files: false
           files: |
             release-assets/windows-installer/M3U8-Downloader-Setup.exe
             release-assets/macos-installers/M3U8-Downloader-Installer.pkg
