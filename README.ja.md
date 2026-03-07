@@ -15,6 +15,33 @@
 - 失敗タスクを `failed_tasks_*.txt` に自動出力
 - 更新チェック（Release 優先、Tag フォールバック）
 - UI言語切替：中国語 / 英語 / 日本語（既定：中国語）
+- Chrome 拡張 [`m3u8-chrome-extension`](https://github.com/lengziyu/m3u8-chrome-extension) と連携可能
+
+## 拡張連携の使い方
+
+拡張機能のリポジトリ:
+
+- [`https://github.com/lengziyu/m3u8-chrome-extension`](https://github.com/lengziyu/m3u8-chrome-extension)
+
+基本手順:
+
+1. 先に `M3U8-Downloader` デスクトップアプリを起動します。
+2. Chrome 拡張 `m3u8-chrome-extension` をインストールして有効化します。
+3. 対応ページを開きます。初期 MVP は主に `missav.ws` の動画詳細ページ向けです。
+4. 拡張が `playlist.m3u8` と解像度一覧を検出します。
+5. 拡張側で追加操作を行うと、選択したタスクがデスクトップアプリへ送信されます。
+
+拡張が使うローカル API:
+
+- `GET http://127.0.0.1:38427/ping`
+- `POST http://127.0.0.1:38427/open-window`
+- `POST http://127.0.0.1:38427/add-task`
+
+ファイル名について:
+
+- 拡張は `filename_hint` を送信でき、クライアントはそれを優先して出力名に使います。
+- `filename_hint` が無い場合は `title` を使います。
+- 拡張でオフライン表示になる場合は、本アプリが起動中か確認してください。
 
 ## 実行
 
@@ -58,6 +85,6 @@ macOS:
 `v*` タグを push すると GitHub Actions で自動リリースされます。
 
 ```bash
-git tag v1.0.8
-git push github v1.0.8
+git tag v1.0.10
+git push github v1.0.10
 ```

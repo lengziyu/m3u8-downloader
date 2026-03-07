@@ -15,6 +15,33 @@
 - 失败任务自动导出 `failed_tasks_*.txt`
 - 版本检测（Release 优先，Tag 回退）
 - 语言切换：中文 / English / 日本語（默认中文）
+- 支持与 Chrome 扩展 [`m3u8-chrome-extension`](https://github.com/lengziyu/m3u8-chrome-extension) 联动添加任务
+
+## 扩展联动使用
+
+配套扩展仓库：
+
+- [`https://github.com/lengziyu/m3u8-chrome-extension`](https://github.com/lengziyu/m3u8-chrome-extension)
+
+使用步骤：
+
+1. 先启动桌面客户端 `M3U8-Downloader`。
+2. 安装并启用 Chrome 扩展 `m3u8-chrome-extension`。
+3. 打开支持的页面，当前第一版主要对接 `missav.ws` 视频详情页。
+4. 扩展识别到 `playlist.m3u8` 后，可在扩展中选择分辨率。
+5. 点击“添加到下载器”后，任务会发送到本地客户端队列中。
+
+桌面端提供的本地接口：
+
+- `GET http://127.0.0.1:38427/ping`
+- `POST http://127.0.0.1:38427/open-window`
+- `POST http://127.0.0.1:38427/add-task`
+
+文件名传递说明：
+
+- 扩展可以传 `filename_hint`，客户端会优先用它作为输出文件名。
+- 如果没有 `filename_hint`，客户端会回退使用 `title`。
+- 如果扩展提示桌面端不在线，请先确认本软件已经启动。
 
 ## 运行
 
@@ -58,6 +85,6 @@ macOS 一键产物：
 推送 `v*` 标签会触发 GitHub Actions 自动构建并发布到 Releases。
 
 ```bash
-git tag v1.0.8
-git push github v1.0.8
+git tag v1.0.10
+git push github v1.0.10
 ```

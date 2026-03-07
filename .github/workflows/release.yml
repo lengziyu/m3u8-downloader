@@ -66,7 +66,7 @@ jobs:
         run: exit 1
 
   build_macos:
-    runs-on: macos-latest
+    runs-on: macos-14
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -80,15 +80,35 @@ jobs:
         run: brew install ffmpeg
 
       - name: Build macOS Installer
-        run: python3 scripts/build_installer.py --version ${{ github.ref_name }} --app-version ${{ github.ref_name }}
+        id: mac_build
+        shell: bash
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          python3 scripts/build_installer.py --version ${{ github.ref_name }} --app-version ${{ github.ref_name }} 2>&1 | tee macos-build.log
+          exit ${PIPESTATUS[0]}
 
       - name: Upload macOS Artifacts
+        if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
           name: macos-installers
           path: |
             dist/M3U8-Downloader-Installer.pkg
             dist/M3U8-Downloader-Installer.dmg
+          if-no-files-found: ignore
+
+      - name: Upload macOS Build Log
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-build-log
+          path: macos-build.log
+          if-no-files-found: ignore
+
+      - name: Fail Job If macOS Installer Build Failed
+        if: ${{ steps.mac_build.outcome != 'success' }}
+        run: exit 1
 
   release:
     runs-on: ubuntu-latest
@@ -128,6 +148,14 @@ jobs:
           name: macos-installers
           path: release-assets/macos-installers
 
+      - name: Download macOS Build Log
+        if: ${{ always() }}
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-build-log
+          path: release-assets/macos-build-log
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -138,3 +166,4 @@ jobs:
             release-assets/windows-build-log/windows-build.log
             release-assets/macos-installers/M3U8-Downloader-Installer.pkg
             release-assets/macos-installers/M3U8-Downloader-Installer.dmg
+            release-assets/macos-build-log/macos-build.log

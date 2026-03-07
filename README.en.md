@@ -15,6 +15,33 @@
 - Auto-export failed tasks to `failed_tasks_*.txt`
 - Update check (Release first, Tag fallback)
 - UI language switch: Chinese / English / Japanese (default: Chinese)
+- Works with the Chrome extension [`m3u8-chrome-extension`](https://github.com/lengziyu/m3u8-chrome-extension)
+
+## Chrome Extension Workflow
+
+Companion extension repository:
+
+- [`https://github.com/lengziyu/m3u8-chrome-extension`](https://github.com/lengziyu/m3u8-chrome-extension)
+
+Basic flow:
+
+1. Launch `M3U8-Downloader` first.
+2. Install and enable the Chrome extension `m3u8-chrome-extension`.
+3. Open a supported page. The first MVP mainly targets `missav.ws` video detail pages.
+4. Let the extension detect `playlist.m3u8` and available resolutions.
+5. Click the add button in the extension to send the selected task to the desktop client.
+
+Local desktop API used by the extension:
+
+- `GET http://127.0.0.1:38427/ping`
+- `POST http://127.0.0.1:38427/open-window`
+- `POST http://127.0.0.1:38427/add-task`
+
+Filename notes:
+
+- The extension can pass `filename_hint`; the desktop client will prefer it as the output name.
+- If `filename_hint` is missing, the client falls back to `title`.
+- If the extension reports the desktop app as offline, make sure this app is already running.
 
 ## Run
 
@@ -58,6 +85,6 @@ Installer build:
 Push a `v*` tag to trigger GitHub Actions release workflow:
 
 ```bash
-git tag v1.0.8
-git push github v1.0.8
+git tag v1.0.10
+git push github v1.0.10
 ```
