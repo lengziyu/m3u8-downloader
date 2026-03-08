@@ -85,6 +85,6 @@ macOS 一键产物：
 推送 `v*` 标签会触发 GitHub Actions 自动构建并发布到 Releases。
 
 ```bash
-git tag v1.0.10
-git push github v1.0.10
+git tag v1.0.11
+git push github v1.0.11
 ```

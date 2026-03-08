@@ -32,10 +32,11 @@ from PySide6.QtCore import (
     QStandardPaths,
     Qt,
     QThread,
+    QUrl,
     Signal,
     Slot,
 )
-from PySide6.QtGui import QBrush, QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap
+from PySide6.QtGui import QBrush, QColor, QDesktopServices, QIcon, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -68,7 +69,7 @@ DEFAULT_USER_AGENT = (
 )
 APP_DISPLAY_NAME = "M3U8-Downloader"
 GITHUB_REPO = os.environ.get("M3U8_DOWNLOADER_GITHUB_REPO", "lengziyu/m3u8-downloader")
-DEFAULT_APP_VERSION = "1.0.8"
+DEFAULT_APP_VERSION = "1.0.11"
 LOCAL_API_HOST = "127.0.0.1"
 LOCAL_API_PORT = 38427
 _FFMPEG_OPTION_SUPPORT_CACHE: dict[tuple[str, str], bool] = {}
@@ -149,6 +150,7 @@ I18N = {
         "task_progress": "任务进度",
         "pause_all": "暂停全部",
         "resume_all": "继续全部",
+        "open_folder": "打开目录",
         "clear_tasks": "清空任务",
         "col_idx": "序号",
         "col_name": "输出文件",
@@ -175,6 +177,7 @@ I18N = {
         "status_failed": "下载失败",
         "row_pause": "暂停",
         "row_resume": "继续",
+        "row_play": "播放",
         "row_delete": "删除",
         "select_output_dir": "选择下载目录",
         "dlg_confirm_delete": "确认删除",
@@ -191,6 +194,8 @@ I18N = {
         "tip_no_running": "当前没有运行中的任务，请使用“开始下载”。",
         "tip_need_more": "请输入要继续添加的链接。",
         "tip_no_new": "没有可添加的新任务（可能都重复或格式无效）。",
+        "tip_dir_missing": "下载目录不存在。",
+        "tip_file_missing": "文件不存在，可能已被移动或删除。",
         "ffmpeg_missing": "ffmpeg 未找到",
         "summary_added": "已新增 {count} 个任务",
         "summary_preparing": "任务 {count} 条，准备开始...",
@@ -242,6 +247,7 @@ I18N = {
         "task_progress": "Task Progress",
         "pause_all": "Pause All",
         "resume_all": "Resume All",
+        "open_folder": "Open Folder",
         "clear_tasks": "Clear Tasks",
         "col_idx": "#",
         "col_name": "Output File",
@@ -268,6 +274,7 @@ I18N = {
         "status_failed": "Failed",
         "row_pause": "Pause",
         "row_resume": "Resume",
+        "row_play": "Play",
         "row_delete": "Delete",
         "select_output_dir": "Select Download Folder",
         "dlg_confirm_delete": "Confirm Delete",
@@ -284,6 +291,8 @@ I18N = {
         "tip_no_running": "No running task. Click Start Download first.",
         "tip_need_more": "Please input URLs to add.",
         "tip_no_new": "No new task to add (duplicate or invalid).",
+        "tip_dir_missing": "Output folder does not exist.",
+        "tip_file_missing": "File does not exist. It may have been moved or deleted.",
         "ffmpeg_missing": "ffmpeg not found",
         "summary_added": "{count} new task(s) added",
         "summary_preparing": "{count} task(s), preparing...",
@@ -335,6 +344,7 @@ I18N = {
         "task_progress": "タスク進捗",
         "pause_all": "すべて一時停止",
         "resume_all": "すべて再開",
+        "open_folder": "フォルダを開く",
         "clear_tasks": "タスククリア",
         "col_idx": "番号",
         "col_name": "出力ファイル",
@@ -361,6 +371,7 @@ I18N = {
         "status_failed": "失敗",
         "row_pause": "停止",
         "row_resume": "再開",
+        "row_play": "再生",
         "row_delete": "削除",
         "select_output_dir": "保存先フォルダを選択",
         "dlg_confirm_delete": "削除確認",
@@ -377,6 +388,8 @@ I18N = {
         "tip_no_running": "実行中タスクがありません。先に開始してください。",
         "tip_need_more": "追加するリンクを入力してください。",
         "tip_no_new": "追加できる新規タスクがありません（重複/無効）。",
+        "tip_dir_missing": "保存先フォルダが存在しません。",
+        "tip_file_missing": "ファイルが見つかりません。移動または削除された可能性があります。",
         "ffmpeg_missing": "ffmpeg が見つかりません",
         "summary_added": "{count} 件を追加しました",
         "summary_preparing": "{count} 件のタスクを準備中...",
@@ -1606,9 +1619,11 @@ class MainWindow(QMainWindow):
         self.row_by_index: dict[int, int] = {}
         self.progress_by_index: dict[int, QProgressBar] = {}
         self.pause_btn_by_index: dict[int, QPushButton] = {}
+        self.play_btn_by_index: dict[int, QPushButton] = {}
         self.delete_btn_by_index: dict[int, QPushButton] = {}
         self.task_status_by_index: dict[int, str] = {}
         self.task_url_by_index: dict[int, str] = {}
+        self.task_output_path_by_index: dict[int, Path] = {}
         self.resume_progress_floor_by_index: dict[int, int] = {}
         self.single_delete_btns: dict[QLineEdit, QPushButton] = {}
         self.pause_all_active = False
@@ -2186,12 +2201,18 @@ class MainWindow(QMainWindow):
         self.pause_all_btn.clicked.connect(self._toggle_pause_all)
         self.pause_all_btn.setEnabled(False)
 
+        self.open_folder_btn = QPushButton("")
+        self.open_folder_btn.setObjectName("tableActionBtn")
+        self.open_folder_btn.setMinimumHeight(36)
+        self.open_folder_btn.clicked.connect(self._open_download_folder)
+
         self.clear_tasks_btn = QPushButton("")
         self.clear_tasks_btn.setObjectName("dangerBtn")
         self.clear_tasks_btn.setMinimumHeight(36)
         self.clear_tasks_btn.clicked.connect(self._clear_tasks_confirm)
 
         table_head.addWidget(self.pause_all_btn)
+        table_head.addWidget(self.open_folder_btn)
         table_head.addWidget(self.clear_tasks_btn)
 
         self.table = QTableWidget(0, 6)
@@ -2265,6 +2286,7 @@ class MainWindow(QMainWindow):
         self.add_more_btn.setText(self.t("add_more"))
         self.table_title_label.setText(self.t("task_progress"))
         self.pause_all_btn.setText(self.t("resume_all") if self.pause_all_active else self.t("pause_all"))
+        self.open_folder_btn.setText(self.t("open_folder"))
         self.clear_tasks_btn.setText(self.t("clear_tasks"))
         self.summary_label.setText(self.summary_label.text() or self.t("summary_wait"))
         self.input_tabs.setTabText(0, self.t("tab_single"))
@@ -2297,6 +2319,8 @@ class MainWindow(QMainWindow):
                 pause_btn.setText(self.t("row_resume"))
             else:
                 pause_btn.setText(self.t("row_pause"))
+        for play_btn in self.play_btn_by_index.values():
+            play_btn.setText(self.t("row_play"))
         for delete_btn in self.delete_btn_by_index.values():
             delete_btn.setText(self.t("row_delete"))
 
@@ -2714,6 +2738,18 @@ class MainWindow(QMainWindow):
                 QPushButton#rowPauseBtn:hover {
                     background: rgba(255, 255, 255, 0.20);
                 }
+                QPushButton#rowPlayBtn {
+                    border-radius: 8px;
+                    border: 1px solid rgba(134, 227, 168, 0.34);
+                    background: rgba(134, 227, 168, 0.14);
+                    color: #CFF9DD;
+                    padding: 2px 8px;
+                    font-size: 11px;
+                    font-weight: 650;
+                }
+                QPushButton#rowPlayBtn:hover {
+                    background: rgba(134, 227, 168, 0.22);
+                }
                 QPushButton#rowDeleteBtn {
                     border-radius: 8px;
                     border: 1px solid rgba(255, 132, 145, 0.68);
@@ -2998,6 +3034,18 @@ class MainWindow(QMainWindow):
                 QPushButton#rowPauseBtn:hover {
                     background: #E8EEF8;
                 }
+                QPushButton#rowPlayBtn {
+                    border-radius: 8px;
+                    border: 1px solid #BFE6CA;
+                    background: #ECFBF1;
+                    color: #1F8F4D;
+                    padding: 2px 8px;
+                    font-size: 11px;
+                    font-weight: 650;
+                }
+                QPushButton#rowPlayBtn:hover {
+                    background: #DDF7E7;
+                }
                 QPushButton#rowDeleteBtn {
                     border-radius: 8px;
                     border: 1px solid #F1A6B2;
@@ -3066,6 +3114,7 @@ class MainWindow(QMainWindow):
         self.row_by_index[task.index] = row
         self.task_status_by_index[task.index] = "waiting"
         self.task_url_by_index[task.index] = task.url
+        self.task_output_path_by_index[task.index] = task.output_path
 
         idx_item = QTableWidgetItem(str(task.index))
         name_item = QTableWidgetItem(task.output_path.name)
@@ -3105,6 +3154,13 @@ class MainWindow(QMainWindow):
         pause_btn.setFixedWidth(56)
         pause_btn.clicked.connect(lambda _, idx=task.index: self._on_row_pause_clicked(idx))
 
+        play_btn = QPushButton(self.t("row_play"))
+        play_btn.setObjectName("rowPlayBtn")
+        play_btn.setMinimumHeight(24)
+        play_btn.setFixedWidth(56)
+        play_btn.setVisible(False)
+        play_btn.clicked.connect(lambda _, idx=task.index: self._on_row_play_clicked(idx))
+
         delete_btn = QPushButton(self.t("row_delete"))
         delete_btn.setObjectName("rowDeleteBtn")
         delete_btn.setMinimumHeight(24)
@@ -3113,10 +3169,12 @@ class MainWindow(QMainWindow):
 
         action_layout.addStretch(1)
         action_layout.addWidget(pause_btn)
+        action_layout.addWidget(play_btn)
         action_layout.addWidget(delete_btn)
         action_layout.addStretch(1)
         self.table.setCellWidget(row, 5, action_wrap)
         self.pause_btn_by_index[task.index] = pause_btn
+        self.play_btn_by_index[task.index] = play_btn
         self.delete_btn_by_index[task.index] = delete_btn
 
     def _set_status(self, row: int, text: str, color: QColor) -> None:
@@ -3218,6 +3276,16 @@ class MainWindow(QMainWindow):
         if btn:
             btn.setEnabled(enabled)
 
+    def _set_play_btn_visible(self, task_index: int, visible: bool) -> None:
+        btn = self.play_btn_by_index.get(task_index)
+        if btn:
+            btn.setVisible(visible)
+
+    def _set_play_btn_enabled(self, task_index: int, enabled: bool) -> None:
+        btn = self.play_btn_by_index.get(task_index)
+        if btn:
+            btn.setEnabled(enabled)
+
     def _capture_resume_floor(self, task_index: int) -> None:
         bar = self.progress_by_index.get(task_index)
         if not bar or bar.maximum() == 0:
@@ -3234,9 +3302,11 @@ class MainWindow(QMainWindow):
         self.row_by_index.pop(task_index, None)
         self.progress_by_index.pop(task_index, None)
         self.pause_btn_by_index.pop(task_index, None)
+        self.play_btn_by_index.pop(task_index, None)
         self.delete_btn_by_index.pop(task_index, None)
         self.task_status_by_index.pop(task_index, None)
         self.task_url_by_index.pop(task_index, None)
+        self.task_output_path_by_index.pop(task_index, None)
         self.resume_progress_floor_by_index.pop(task_index, None)
 
         for idx, current_row in list(self.row_by_index.items()):
@@ -3287,6 +3357,27 @@ class MainWindow(QMainWindow):
             return
         self.worker.apply_command("delete", task_index)
 
+    def _open_path(self, path: Path, missing_key: str) -> None:
+        target = path.expanduser().resolve()
+        if not target.exists():
+            QMessageBox.warning(self, self.t("tip"), self.t(missing_key))
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(target)))
+
+    def _open_download_folder(self) -> None:
+        target_text = self.output_dir_input.text().strip()
+        if not target_text:
+            QMessageBox.warning(self, self.t("tip"), self.t("tip_dir_missing"))
+            return
+        self._open_path(Path(target_text), "tip_dir_missing")
+
+    def _on_row_play_clicked(self, task_index: int) -> None:
+        target = self.task_output_path_by_index.get(task_index)
+        if not target:
+            QMessageBox.warning(self, self.t("tip"), self.t("tip_file_missing"))
+            return
+        self._open_path(target, "tip_file_missing")
+
     def _toggle_pause_all(self) -> None:
         if not self.worker:
             return
@@ -3307,9 +3398,11 @@ class MainWindow(QMainWindow):
         self.row_by_index.clear()
         self.progress_by_index.clear()
         self.pause_btn_by_index.clear()
+        self.play_btn_by_index.clear()
         self.delete_btn_by_index.clear()
         self.task_status_by_index.clear()
         self.task_url_by_index.clear()
+        self.task_output_path_by_index.clear()
         self.resume_progress_floor_by_index.clear()
 
     def _clear_tasks_confirm(self) -> None:
@@ -3438,6 +3531,7 @@ class MainWindow(QMainWindow):
                 detail_item.setText(localized_detail)
             self._set_pause_btn_state(task_index, paused=False)
             self._set_pause_btn_visible(task_index, True)
+            self._set_play_btn_visible(task_index, False)
             return
 
         if status == "progress" and bar:
@@ -3469,6 +3563,7 @@ class MainWindow(QMainWindow):
             )
             self._set_pause_btn_state(task_index, paused=False)
             self._set_pause_btn_visible(task_index, True)
+            self._set_play_btn_visible(task_index, False)
             self._set_delete_btn_enabled(task_index, True)
             if detail_item:
                 detail_item.setText(self._localize_detail(detail))
@@ -3483,6 +3578,8 @@ class MainWindow(QMainWindow):
             )
             self._set_pause_btn_state(task_index, paused=False, enabled=False)
             self._set_pause_btn_visible(task_index, False)
+            self._set_play_btn_visible(task_index, True)
+            self._set_play_btn_enabled(task_index, self.task_output_path_by_index.get(task_index, Path()).exists())
             self._set_delete_btn_enabled(task_index, True)
             if bar:
                 if bar.maximum() == 0:
@@ -3502,6 +3599,8 @@ class MainWindow(QMainWindow):
             )
             self._set_pause_btn_state(task_index, paused=False, enabled=False)
             self._set_pause_btn_visible(task_index, False)
+            self._set_play_btn_visible(task_index, True)
+            self._set_play_btn_enabled(task_index, self.task_output_path_by_index.get(task_index, Path()).exists())
             self._set_delete_btn_enabled(task_index, True)
             if bar:
                 bar.setRange(0, 100)
@@ -3519,6 +3618,7 @@ class MainWindow(QMainWindow):
             )
             self._set_pause_btn_state(task_index, paused=True)
             self._set_pause_btn_visible(task_index, True)
+            self._set_play_btn_visible(task_index, False)
             if bar and bar.maximum() == 0:
                 bar.setRange(0, 100)
                 bar.setValue(0)
@@ -3536,6 +3636,7 @@ class MainWindow(QMainWindow):
             )
             self._set_pause_btn_state(task_index, paused=False, enabled=False)
             self._set_pause_btn_visible(task_index, False)
+            self._set_play_btn_visible(task_index, False)
             self._set_delete_btn_enabled(task_index, True)
             if bar:
                 bar.setRange(0, 100)
@@ -3554,6 +3655,7 @@ class MainWindow(QMainWindow):
             )
             self._set_pause_btn_state(task_index, paused=False, enabled=False)
             self._set_pause_btn_visible(task_index, False)
+            self._set_play_btn_visible(task_index, False)
             self._set_delete_btn_enabled(task_index, True)
             if bar:
                 bar.setRange(0, 100)

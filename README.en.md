@@ -85,6 +85,6 @@ Installer build:
 Push a `v*` tag to trigger GitHub Actions release workflow:
 
 ```bash
-git tag v1.0.10
-git push github v1.0.10
+git tag v1.0.11
+git push github v1.0.11
 ```

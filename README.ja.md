@@ -85,6 +85,6 @@ macOS:
 `v*` タグを push すると GitHub Actions で自動リリースされます。
 
 ```bash
-git tag v1.0.10
-git push github v1.0.10
+git tag v1.0.11
+git push github v1.0.11
 ```
