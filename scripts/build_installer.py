@@ -11,8 +11,8 @@ import tempfile
 from pathlib import Path
 
 
-APP_NAME = "M3U8-Downloader"
-MAC_APP_ID = "com.lens.m3u8downloader"
+APP_NAME = "Taoying"
+MAC_APP_ID = "com.lens.taoying"
 # Inno Setup AppId should use GUID form (escaped with double '{{' in iss).
 WIN_APP_ID = "{{8A8D3E35-2D02-4D88-A8D0-4D1D6D2F7C31}"
 ROOT = Path(__file__).resolve().parent.parent

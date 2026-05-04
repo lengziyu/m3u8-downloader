@@ -1,52 +1,27 @@
-# M3U8-Downloader（日本語）
+# 桃影（日本語）
 
 [中文](README.zh-CN.md) | [English](README.en.md)
 
-[最新リリース（Tag）をダウンロード](https://github.com/lengziyu/m3u8-downloader/releases/latest)
+[最新リリース](https://github.com/lengziyu/m3u8-downloader/releases/latest)
+
+`桃影` は、`m3u8` 動画を `mp4` として保存し、ダウンロード後の検証や壊れた動画の修復まで行えるデスクトップクライアントです。
 
 ## 機能
 
-- Windows 10/11・macOS 対応デスクトップアプリ
-- `m3u8` を一括で `mp4` に保存
-- 1件入力モード + 一括テキストモード
-- 保存先 / 並列数 / リトライ設定
-- タスクごとの進捗、停止/再開、削除
-- ダウンロード中に新規タスク追加可能
-- 失敗タスクを `failed_tasks_*.txt` に自動出力
-- 更新チェック（Release 優先、Tag フォールバック）
-- UI言語切替：中国語 / 英語 / 日本語（既定：中国語）
+- Windows 10/11、macOS 対応
+- 単体入力と一括入力の両方に対応
+- ダウンロード後に自動検証
+- 壊れた MP4 を修復する専用ページ
+- 左側メニュー式 UI
+- ライト / ダークテーマ
+- 中国語 / 英語 / 日本語 UI
 - Chrome 拡張 [`m3u8-chrome-extension`](https://github.com/lengziyu/m3u8-chrome-extension) と連携可能
 
-## 拡張連携の使い方
-
-拡張機能のリポジトリ:
-
-- [`https://github.com/lengziyu/m3u8-chrome-extension`](https://github.com/lengziyu/m3u8-chrome-extension)
-
-基本手順:
-
-1. 先に `M3U8-Downloader` デスクトップアプリを起動します。
-2. Chrome 拡張 `m3u8-chrome-extension` をインストールして有効化します。
-3. 対応ページを開きます。初期 MVP は主に `missav.ws` の動画詳細ページ向けです。
-4. 拡張が `playlist.m3u8` と解像度一覧を検出します。
-5. 拡張側で追加操作を行うと、選択したタスクがデスクトップアプリへ送信されます。
-
-拡張が使うローカル API:
-
-- `GET http://127.0.0.1:38427/ping`
-- `POST http://127.0.0.1:38427/open-window`
-- `POST http://127.0.0.1:38427/add-task`
-
-ファイル名について:
-
-- 拡張は `filename_hint` を送信でき、クライアントはそれを優先して出力名に使います。
-- `filename_hint` が無い場合は `title` を使います。
-- 拡張でオフライン表示になる場合は、本アプリが起動中か確認してください。
-
-## 実行
+## 使い方
 
 ```bash
 python -m pip install -r requirements.txt
+python m3u8_gui.py
 ```
 
 Windows:
@@ -55,36 +30,9 @@ Windows:
 scripts\run_windows.bat
 ```
 
-macOS:
+## 拡張連携
 
-```bash
-./scripts/run_mac.sh
-```
-
-## ビルド
-
-Windows:
-
-```bat
-scripts\build_windows.bat
-```
-
-macOS:
-
-```bash
-./scripts/build_mac.sh
-```
-
-インストーラ:
-
-- Windows: `scripts\build_windows_installer.bat`
-- macOS: `./scripts/build_mac_installer.sh`
-
-## 自動リリース
-
-`v*` タグを push すると GitHub Actions で自動リリースされます。
-
-```bash
-git tag v1.0.11
-git push github v1.0.11
-```
+1. 先に `桃影` を起動します
+2. `m3u8-chrome-extension` を有効化します
+3. 対応ページで `playlist.m3u8` を検出します
+4. 拡張からデスクトップクライアントへ送信します

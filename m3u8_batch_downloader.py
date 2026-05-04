@@ -162,6 +162,64 @@ def run_ffmpeg(cmd: list[str]) -> tuple[bool, str]:
     return False, err[-1500:]
 
 
+def build_sidecar_output_path(path: Path, tag: str) -> Path:
+    stem = path.stem or "video"
+    suffix = path.suffix or ".mp4"
+    candidate = path.with_name(f"{stem}.{tag}{suffix}")
+    counter = 1
+    while candidate.exists():
+        candidate = path.with_name(f"{stem}.{tag}.{counter}{suffix}")
+        counter += 1
+    return candidate
+
+
+def cleanup_file(path: Path | None) -> None:
+    if not path:
+        return
+    try:
+        if path.exists():
+            path.unlink()
+    except OSError:
+        pass
+
+
+def replace_file_atomic(source_path: Path, final_path: Path) -> None:
+    final_path.parent.mkdir(parents=True, exist_ok=True)
+    os.replace(str(source_path), str(final_path))
+
+
+def validate_output_media(path: Path, ffmpeg: str) -> tuple[bool, str | None]:
+    if not path.exists():
+        return False, "输出文件不存在"
+    if path.stat().st_size < 256 * 1024:
+        return False, "输出文件过小"
+
+    test_cmd = [
+        ffmpeg,
+        "-v",
+        "error",
+        "-ss",
+        "0",
+        "-t",
+        "1.5",
+        "-i",
+        str(path),
+        "-f",
+        "null",
+        "-",
+    ]
+    proc = subprocess.run(
+        test_cmd,
+        capture_output=True,
+        text=True,
+        **subprocess_no_window_kwargs(),
+    )
+    if proc.returncode != 0:
+        err = (proc.stderr or proc.stdout or "").strip()
+        return False, err[-1500:] or "解码测试失败"
+    return True, None
+
+
 def download_one(
     task: DownloadTask,
     ffmpeg: str,
@@ -176,6 +234,19 @@ def download_one(
 ) -> tuple[str, DownloadTask, str | None]:
     if task.output_path.exists() and not overwrite:
         return ("skipped", task, "目标文件已存在")
+
+    working_output = build_sidecar_output_path(task.output_path, "downloading")
+
+    def cleanup_partial_output() -> None:
+        cleanup_file(working_output)
+
+    def finalize_output() -> tuple[bool, str | None]:
+        try:
+            replace_file_atomic(working_output, task.output_path)
+            return True, None
+        except OSError as exc:
+            cleanup_partial_output()
+            return False, str(exc)
 
     common = [
         ffmpeg,
@@ -197,7 +268,7 @@ def download_one(
         "aac_adtstoasc",
         "-movflags",
         "+faststart",
-        str(task.output_path),
+        str(working_output),
     ]
     transcode_cmd = common + [
         "-c:v",
@@ -212,7 +283,7 @@ def download_one(
         "192k",
         "-movflags",
         "+faststart",
-        str(task.output_path),
+        str(working_output),
     ]
 
     if dry_run:
@@ -221,21 +292,42 @@ def download_one(
 
     last_error: str | None = None
     for attempt in range(1, retries + 2):
+        cleanup_partial_output()
         ok, err = run_ffmpeg(copy_cmd)
         if ok:
-            return ("ok", task, None)
+            media_ok, media_reason = validate_output_media(working_output, ffmpeg)
+            if media_ok:
+                finalize_ok, finalize_err = finalize_output()
+                if finalize_ok:
+                    return ("ok", task, None)
+                return ("failed", task, f"写入最终文件失败: {finalize_err or 'unknown error'}")
+            last_error = f"copy 成功但文件异常: {media_reason or 'unknown error'}"
+            cleanup_partial_output()
+        else:
+            last_error = f"copy 模式失败: {err or 'unknown error'}"
 
-        last_error = f"copy 模式失败: {err or 'unknown error'}"
         if transcode_on_fail:
+            cleanup_partial_output()
             ok2, err2 = run_ffmpeg(transcode_cmd)
             if ok2:
-                return ("ok", task, "copy 失败，已自动转码")
-            last_error = f"{last_error} | transcode 失败: {err2 or 'unknown error'}"
+                media_ok2, media_reason2 = validate_output_media(working_output, ffmpeg)
+                if media_ok2:
+                    finalize_ok, finalize_err = finalize_output()
+                    if finalize_ok:
+                        return ("ok", task, "copy 失败，已自动转码")
+                    return ("failed", task, f"写入最终文件失败: {finalize_err or 'unknown error'}")
+                cleanup_partial_output()
+                last_error = f"{last_error} | 转码后校验失败: {media_reason2 or 'unknown error'}"
+            else:
+                cleanup_partial_output()
+                last_error = f"{last_error} | transcode 失败: {err2 or 'unknown error'}"
 
         if attempt <= retries:
             time.sleep(min(2 * attempt, 8))
 
+    cleanup_partial_output()
     return ("failed", task, last_error)
+
 
 
 def build_tasks(

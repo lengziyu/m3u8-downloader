@@ -11,7 +11,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 
-APP_NAME = "M3U8-Downloader"
+APP_NAME = "Taoying"
 ROOT = Path(__file__).resolve().parent.parent
 DIST_DIR = ROOT / "dist"
 DEFAULT_VENV_DIR = ROOT / ".build-venv"

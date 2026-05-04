@@ -36,7 +36,7 @@ from PySide6.QtCore import (
     Signal,
     Slot,
 )
-from PySide6.QtGui import QBrush, QColor, QDesktopServices, QIcon, QPainter, QPainterPath, QPen, QPixmap
+from PySide6.QtGui import QAction, QBrush, QColor, QDesktopServices, QIcon, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -54,6 +54,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSpinBox,
+    QStackedWidget,
     QTabWidget,
     QTableWidget,
     QTableWidgetItem,
@@ -67,9 +68,10 @@ DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
 )
-APP_DISPLAY_NAME = "M3U8-Downloader"
+APP_DISPLAY_NAME = "桃影"
+APP_RELEASE_NAME = "Taoying"
 GITHUB_REPO = os.environ.get("M3U8_DOWNLOADER_GITHUB_REPO", "lengziyu/m3u8-downloader")
-DEFAULT_APP_VERSION = "1.0.11"
+DEFAULT_APP_VERSION = "1.1.0"
 LOCAL_API_HOST = "127.0.0.1"
 LOCAL_API_PORT = 38427
 _FFMPEG_OPTION_SUPPORT_CACHE: dict[tuple[str, str], bool] = {}
@@ -130,23 +132,23 @@ LANG_ORDER = ["zh", "en", "ja"]
 LANG_LABEL = {"zh": "中文", "en": "English", "ja": "日本語"}
 I18N = {
     "zh": {
-        "settings_toggle": "⚙ 设置",
-        "settings_title": "下载设置",
+        "settings_toggle": "设置",
+        "settings_title": "下载偏好",
         "output_dir": "下载目录",
         "choose_dir": "选择目录",
-        "jobs": "并发",
-        "retries": "重试",
-        "title_sub": "支持 Windows 10/11、macOS；批量下载为 MP4；失败任务自动导出",
+        "jobs": "并发任务",
+        "retries": "失败重试",
+        "title_sub": "轻巧的 m3u8 视频下载与修复客户端",
         "input_title": "M3U8 链接输入",
-        "single_hint": "逐条输入：每个输入框一个链接，填完会自动新增下一行",
+        "single_hint": "逐条输入：每一行只放一个链接，填满后会自动补出下一行。",
         "single_remove": "删除",
-        "batch_hint": "批量文本：支持多行，也支持一行用 | 分隔多个链接",
+        "batch_hint": "批量文本：支持多行输入，也支持一行用 | 分隔多个链接。",
         "batch_clear": "清空",
         "tab_single": "逐条输入",
         "tab_batch": "批量文本",
         "start": "开始下载",
-        "add_more": "继续添加",
-        "summary_wait": "等待开始",
+        "add_more": "继续追加",
+        "summary_wait": "等待开始下载。",
         "task_progress": "任务进度",
         "pause_all": "暂停全部",
         "resume_all": "继续全部",
@@ -158,58 +160,58 @@ I18N = {
         "col_progress": "进度",
         "col_detail": "详情",
         "col_actions": "操作",
-        "version_checking": "⟳ 检查中... v{version}",
-        "version_plain": "⟳ v{version}",
-        "dlg_version": "版本检测",
-        "version_repo_missing": "未配置 GitHub 仓库。请设置 m3u8_gui.py 中的 GITHUB_REPO，或设置环境变量 M3U8_DOWNLOADER_GITHUB_REPO=owner/repo。",
-        "version_latest": "已是最新版本。\n当前版本：v{current}\n最新版本：{latest}",
+        "version_checking": "正在检查更新 v{version}",
+        "version_plain": "当前版本 v{version}",
+        "dlg_version": "版本信息",
+        "version_repo_missing": "还没有配置 GitHub 仓库，请先在环境变量或源码里设置 GITHUB_REPO。",
+        "version_latest": "已经是最新版本。\n当前版本：v{current}\n最新版本：{latest}",
         "dlg_new_version": "发现新版本",
-        "version_update": "当前版本：v{current}\n最新版本：{latest}\n\n是否前往 Releases 下载更新？",
-        "version_failed": "无法检测更新：{err}",
+        "version_update": "当前版本：v{current}\n最新版本：{latest}\n\n是否打开 Releases 页面下载更新？",
+        "version_failed": "检查更新失败：{err}",
         "settings_collapse": "收起设置",
         "settings_expand": "展开设置",
         "status_waiting": "准备中",
-        "status_downloading": "正在下载",
+        "status_downloading": "下载中",
         "status_done": "已完成",
         "status_skipped": "已跳过",
         "status_paused": "已暂停",
         "status_deleted": "已删除",
-        "status_failed": "下载失败",
+        "status_failed": "已失败",
         "row_pause": "暂停",
         "row_resume": "继续",
         "row_play": "播放",
         "row_delete": "删除",
         "select_output_dir": "选择下载目录",
         "dlg_confirm_delete": "确认删除",
-        "dlg_confirm_delete_running": "确定删除这个任务吗？运行中的任务会立即中断。",
-        "dlg_confirm_delete_row": "确定从列表中移除这个任务吗？",
+        "dlg_confirm_delete_running": "确定删除这个任务吗？正在执行的任务会立即中断。",
+        "dlg_confirm_delete_row": "确定只从列表中移除这个任务吗？",
         "dlg_confirm_clear": "确认清空任务",
-        "dlg_confirm_clear_running": "确定清空所有任务吗？正在下载的任务会被中断。",
-        "dlg_confirm_clear_idle": "确定清空任务列表吗？",
-        "summary_clear_requested": "已请求清空任务，等待当前线程退出...",
-        "summary_cleared": "任务列表已清空",
+        "dlg_confirm_clear_running": "确定清空全部任务吗？正在下载的任务会被中断。",
+        "dlg_confirm_clear_idle": "确定清空当前任务列表吗？",
+        "summary_clear_requested": "已请求清空任务，正在等待当前线程退出。",
+        "summary_cleared": "任务列表已清空。",
         "tip": "提示",
-        "tip_need_url": "请输入至少一个 m3u8 链接。",
+        "tip_need_url": "请至少输入一个 m3u8 链接。",
         "tip_need_dir": "请先选择下载目录。",
-        "tip_no_running": "当前没有运行中的任务，请使用“开始下载”。",
-        "tip_need_more": "请输入要继续添加的链接。",
-        "tip_no_new": "没有可添加的新任务（可能都重复或格式无效）。",
+        "tip_no_running": "当前没有正在运行的任务，请先开始下载。",
+        "tip_need_more": "请输入要继续追加的链接。",
+        "tip_no_new": "没有可追加的新任务，可能都重复了或者格式无效。",
         "tip_dir_missing": "下载目录不存在。",
-        "tip_file_missing": "文件不存在，可能已被移动或删除。",
-        "ffmpeg_missing": "ffmpeg 未找到",
-        "summary_added": "已新增 {count} 个任务",
-        "summary_preparing": "任务 {count} 条，准备开始...",
+        "tip_file_missing": "文件不存在，可能已经被移动或删除。",
+        "ffmpeg_missing": "找不到 ffmpeg",
+        "summary_added": "已追加 {count} 个新任务。",
+        "summary_preparing": "共 {count} 个任务，正在准备下载。",
         "progress_loading": "加载中...",
-        "progress_paused": "暂停",
-        "progress_deleted": "已删",
-        "progress_failed": "失败",
+        "progress_paused": "已暂停",
+        "progress_deleted": "已删除",
+        "progress_failed": "已失败",
         "summary_done": "完成：成功 {success} | 跳过 {skipped} | 失败 {failed}",
         "summary_done_file": " | 失败清单：{file}",
         "dlg_batch_done": "任务完成",
         "dlg_batch_done_fail": "成功 {success}，跳过 {skipped}，失败 {failed}。\n失败清单已导出：\n{file}",
         "dlg_batch_done_ok": "全部完成。成功 {success}，跳过 {skipped}。",
         "single_placeholder": "https://example.com/video.m3u8",
-        "batch_placeholder": "示例:\nhttps://example.com/episode01.m3u8\n日本語字幕|https://example.com/episode02.m3u8\nhttps://example.com/episode03.m3u8#日文\n\n或一行：\nhttps://a.m3u8|https://b.m3u8|https://c.m3u8",
+        "batch_placeholder": "示例：\nhttps://example.com/episode01.m3u8\n渚光希|https://example.com/episode02.m3u8\nhttps://example.com/episode03.m3u8#日文标题\n\n或一行输入：\nhttps://a.m3u8|https://b.m3u8|https://c.m3u8",
         "detail_wait_dispatch": "等待执行",
         "detail_retry_wait": "重试等待中",
         "detail_validating": "校验文件",
@@ -225,47 +227,89 @@ I18N = {
         "detail_unknown_err": "未知错误",
         "detail_downloading_try": "下载中（尝试 {attempt}/{total}）",
         "lang_tip": "切换语言",
+        "sidebar_caption": "功能导航",
+        "nav_download": "下载",
+        "nav_directory": "目录",
+        "nav_repair": "修复视频",
+        "nav_settings": "设置",
+        "page_badge": "Airy Pink",
+        "page_download_title": "视频下载",
+        "page_download_sub": "输入单条或批量 m3u8 链接，稳定下载并自动校验输出文件。",
+        "page_directory_title": "下载目录",
+        "page_directory_sub": "把保存路径单独放出来，方便随时切换和打开。",
+        "page_repair_title": "视频修复",
+        "page_repair_sub": "对已下载但元数据异常的 MP4 进行重封装或转码修复。",
+        "page_settings_title": "偏好设置",
+        "page_settings_sub": "主题、语言、并发和重试都集中放在这里。",
+        "dir_hint": "当前目录会用于下载输出，也会作为修复视频的默认选择位置。",
+        "repair_file_label": "待修复文件",
+        "repair_choose": "选择视频",
+        "repair_start": "开始修复",
+        "repair_open_output": "打开修复结果",
+        "repair_idle": "选择一个 mp4 文件后点击开始修复，修复结果会另存，不覆盖原文件。",
+        "settings_lang": "界面语言",
+        "settings_theme": "界面主题",
+        "settings_download": "下载调优",
+        "settings_version": "版本检查",
+        "theme_light": "浅色",
+        "theme_dark": "深色",
+        "menu_file": "文件",
+        "menu_tools": "工具",
+        "action_repair_video": "修复视频...",
+        "action_exit": "退出",
+        "dlg_confirm_exit": "确认退出",
+        "dlg_confirm_exit_running": "当前还有下载任务正在运行。现在退出会先尝试停止这些任务，确定继续吗？",
+        "summary_exit_stopping": "正在停止下载任务，准备退出...",
+        "tip_exit_wait_stop": "仍有任务未能及时停止，请稍后再试。",
+        "dlg_select_repair_file": "选择要修复的视频",
+        "repair_filter": "视频文件 (*.mp4 *.mkv *.mov *.m4v);;所有文件 (*.*)",
+        "tip_repair_missing": "选择的视频文件不存在。",
+        "repair_result_healthy": "这个视频看起来是正常的，不需要修复。",
+        "repair_result_remux": "修复完成，已生成新的无损重封装文件：\n{file}",
+        "repair_result_transcode": "修复完成，已生成新的转码文件：\n{file}",
+        "repair_result_failed": "修复失败。",
+        "repair_result_failed_detail": "修复失败：{detail}",
     },
     "en": {
-        "settings_toggle": "⚙ Settings",
-        "settings_title": "Download Settings",
-        "output_dir": "Output Folder",
+        "settings_toggle": "Settings",
+        "settings_title": "Download Preferences",
+        "output_dir": "Download Folder",
         "choose_dir": "Choose Folder",
-        "jobs": "Concurrency",
+        "jobs": "Parallel Jobs",
         "retries": "Retries",
-        "title_sub": "Windows 10/11 & macOS; batch M3U8 to MP4; failed tasks auto-export",
+        "title_sub": "A compact m3u8 downloader and repair client",
         "input_title": "M3U8 Input",
-        "single_hint": "Single mode: one URL per line edit; a new line is auto-created after input.",
-        "single_remove": "Delete",
-        "batch_hint": "Batch text: supports multiple lines, or single line separated by |.",
+        "single_hint": "Single mode: one link per row. A new row appears automatically when the last one is filled.",
+        "single_remove": "Remove",
+        "batch_hint": "Batch mode: paste multiple lines, or use | to separate links in a single line.",
         "batch_clear": "Clear",
         "tab_single": "Single",
         "tab_batch": "Batch",
         "start": "Start Download",
-        "add_more": "Add More",
-        "summary_wait": "Waiting to start",
+        "add_more": "Append More",
+        "summary_wait": "Waiting to start.",
         "task_progress": "Task Progress",
         "pause_all": "Pause All",
         "resume_all": "Resume All",
         "open_folder": "Open Folder",
         "clear_tasks": "Clear Tasks",
         "col_idx": "#",
-        "col_name": "Output File",
+        "col_name": "Output",
         "col_status": "Status",
         "col_progress": "Progress",
         "col_detail": "Detail",
-        "col_actions": "Action",
-        "version_checking": "⟳ Checking... v{version}",
-        "version_plain": "⟳ v{version}",
-        "dlg_version": "Version Check",
-        "version_repo_missing": "GitHub repo is not configured. Set GITHUB_REPO in m3u8_gui.py or M3U8_DOWNLOADER_GITHUB_REPO=owner/repo.",
-        "version_latest": "You are up to date.\nCurrent: v{current}\nLatest: {latest}",
+        "col_actions": "Actions",
+        "version_checking": "Checking updates v{version}",
+        "version_plain": "Current version v{version}",
+        "dlg_version": "Version",
+        "version_repo_missing": "GitHub repository is not configured yet.",
+        "version_latest": "You already have the latest version.\nCurrent: v{current}\nLatest: {latest}",
         "dlg_new_version": "Update Available",
-        "version_update": "Current: v{current}\nLatest: {latest}\n\nOpen Releases page now?",
+        "version_update": "Current: v{current}\nLatest: {latest}\n\nOpen the Releases page now?",
         "version_failed": "Update check failed: {err}",
         "settings_collapse": "Collapse settings",
         "settings_expand": "Expand settings",
-        "status_waiting": "Waiting",
+        "status_waiting": "Preparing",
         "status_downloading": "Downloading",
         "status_done": "Done",
         "status_skipped": "Skipped",
@@ -276,93 +320,135 @@ I18N = {
         "row_resume": "Resume",
         "row_play": "Play",
         "row_delete": "Delete",
-        "select_output_dir": "Select Download Folder",
+        "select_output_dir": "Choose Download Folder",
         "dlg_confirm_delete": "Confirm Delete",
-        "dlg_confirm_delete_running": "Delete this task? Running task will stop immediately.",
+        "dlg_confirm_delete_running": "Delete this task now? A running task will be interrupted immediately.",
         "dlg_confirm_delete_row": "Remove this task from the list?",
         "dlg_confirm_clear": "Confirm Clear",
-        "dlg_confirm_clear_running": "Clear all tasks? Running tasks will be stopped.",
-        "dlg_confirm_clear_idle": "Clear task list?",
-        "summary_clear_requested": "Clear requested. Waiting for running workers to stop...",
-        "summary_cleared": "Task list cleared",
-        "tip": "Notice",
-        "tip_need_url": "Please input at least one m3u8 URL.",
-        "tip_need_dir": "Please choose output folder first.",
-        "tip_no_running": "No running task. Click Start Download first.",
-        "tip_need_more": "Please input URLs to add.",
-        "tip_no_new": "No new task to add (duplicate or invalid).",
-        "tip_dir_missing": "Output folder does not exist.",
-        "tip_file_missing": "File does not exist. It may have been moved or deleted.",
+        "dlg_confirm_clear_running": "Clear all tasks? Active downloads will be interrupted.",
+        "dlg_confirm_clear_idle": "Clear the current task list?",
+        "summary_clear_requested": "Clear requested. Waiting for the worker thread to stop.",
+        "summary_cleared": "Task list cleared.",
+        "tip": "Info",
+        "tip_need_url": "Enter at least one m3u8 link.",
+        "tip_need_dir": "Choose a download folder first.",
+        "tip_no_running": "No task is running right now.",
+        "tip_need_more": "Enter links to append.",
+        "tip_no_new": "No new task can be appended. They may be duplicates or invalid.",
+        "tip_dir_missing": "The download folder does not exist.",
+        "tip_file_missing": "The file does not exist. It may have been moved or removed.",
         "ffmpeg_missing": "ffmpeg not found",
-        "summary_added": "{count} new task(s) added",
-        "summary_preparing": "{count} task(s), preparing...",
+        "summary_added": "Added {count} new tasks.",
+        "summary_preparing": "Preparing {count} tasks.",
         "progress_loading": "Loading...",
         "progress_paused": "Paused",
         "progress_deleted": "Deleted",
         "progress_failed": "Failed",
         "summary_done": "Done: success {success} | skipped {skipped} | failed {failed}",
-        "summary_done_file": " | failed list: {file}",
-        "dlg_batch_done": "Batch Completed",
-        "dlg_batch_done_fail": "Success {success}, skipped {skipped}, failed {failed}.\nFailed list exported:\n{file}",
-        "dlg_batch_done_ok": "All done. Success {success}, skipped {skipped}.",
+        "summary_done_file": " | failures: {file}",
+        "dlg_batch_done": "Completed",
+        "dlg_batch_done_fail": "Success {success}, skipped {skipped}, failed {failed}.\nFailure list exported to:\n{file}",
+        "dlg_batch_done_ok": "All tasks completed. Success {success}, skipped {skipped}.",
         "single_placeholder": "https://example.com/video.m3u8",
-        "batch_placeholder": "Examples:\nhttps://example.com/episode01.m3u8\nEnglish_sub|https://example.com/episode02.m3u8\nhttps://example.com/episode03.m3u8#JP\n\nOr one line:\nhttps://a.m3u8|https://b.m3u8|https://c.m3u8",
-        "detail_wait_dispatch": "Queued",
-        "detail_retry_wait": "Waiting before retry",
-        "detail_validating": "Validating output",
-        "detail_copy_fallback": "Copy failed, transcoding",
-        "detail_copy_invalid_fix": "Copy completed but invalid output, repairing with transcode",
-        "detail_finished": "Downloaded",
-        "detail_skipped": "Output already exists",
+        "batch_placeholder": "Example:\nhttps://example.com/episode01.m3u8\nMitsuki Nagisa|https://example.com/episode02.m3u8\nhttps://example.com/episode03.m3u8#Japanese title\n\nOr in one line:\nhttps://a.m3u8|https://b.m3u8|https://c.m3u8",
+        "detail_wait_dispatch": "Waiting",
+        "detail_retry_wait": "Waiting to retry",
+        "detail_validating": "Validating file",
+        "detail_copy_fallback": "copy failed, transcoding",
+        "detail_copy_invalid_fix": "copy succeeded but file is invalid, repairing by transcode",
+        "detail_finished": "Download finished",
+        "detail_skipped": "Target file already exists",
         "detail_paused": "Paused",
         "detail_deleted": "Deleted",
         "detail_interrupted": "Interrupted",
-        "detail_copy_transcoded": "Copy failed, auto transcoded",
-        "detail_copy_fixed": "Invalid copy output fixed by transcode",
+        "detail_copy_transcoded": "copy failed, transcoded automatically",
+        "detail_copy_fixed": "invalid copy fixed by automatic transcode",
         "detail_unknown_err": "Unknown error",
         "detail_downloading_try": "Downloading (attempt {attempt}/{total})",
         "lang_tip": "Switch language",
+        "sidebar_caption": "Navigation",
+        "nav_download": "Download",
+        "nav_directory": "Directory",
+        "nav_repair": "Repair",
+        "nav_settings": "Settings",
+        "page_badge": "Airy Pink",
+        "page_download_title": "Video Download",
+        "page_download_sub": "Paste m3u8 links, download reliably, and validate every output file.",
+        "page_directory_title": "Download Directory",
+        "page_directory_sub": "Keep the save path on its own page so it is always easy to switch and open.",
+        "page_repair_title": "Video Repair",
+        "page_repair_sub": "Repair downloaded MP4 files with broken metadata through remux or transcode.",
+        "page_settings_title": "Preferences",
+        "page_settings_sub": "Language, theme, concurrency, and retries live here.",
+        "dir_hint": "This folder is used for downloads and also becomes the default starting location for repair.",
+        "repair_file_label": "Source File",
+        "repair_choose": "Choose Video",
+        "repair_start": "Repair Now",
+        "repair_open_output": "Open Repaired File",
+        "repair_idle": "Choose an mp4 file and start repair. The result is saved as a new file.",
+        "settings_lang": "Language",
+        "settings_theme": "Theme",
+        "settings_download": "Download Tuning",
+        "settings_version": "Version Check",
+        "theme_light": "Light",
+        "theme_dark": "Dark",
+        "menu_file": "File",
+        "menu_tools": "Tools",
+        "action_repair_video": "Repair Video...",
+        "action_exit": "Exit",
+        "dlg_confirm_exit": "Confirm Exit",
+        "dlg_confirm_exit_running": "There are active downloads. Exit now and stop them first?",
+        "summary_exit_stopping": "Stopping downloads before exit...",
+        "tip_exit_wait_stop": "Some tasks are still stopping. Please try again in a moment.",
+        "dlg_select_repair_file": "Select Video to Repair",
+        "repair_filter": "Video Files (*.mp4 *.mkv *.mov *.m4v);;All Files (*.*)",
+        "tip_repair_missing": "The selected video file does not exist.",
+        "repair_result_healthy": "This video looks healthy and does not need repair.",
+        "repair_result_remux": "Repair complete. A new remuxed file was created:\n{file}",
+        "repair_result_transcode": "Repair complete. A new transcoded file was created:\n{file}",
+        "repair_result_failed": "Repair failed.",
+        "repair_result_failed_detail": "Repair failed: {detail}",
     },
     "ja": {
-        "settings_toggle": "⚙ 設定",
+        "settings_toggle": "設定",
         "settings_title": "ダウンロード設定",
-        "output_dir": "保存先フォルダ",
-        "choose_dir": "フォルダ選択",
-        "jobs": "並列数",
-        "retries": "リトライ",
-        "title_sub": "Windows 10/11・macOS 対応、M3U8 を MP4 に一括保存、失敗タスクを自動出力",
+        "output_dir": "保存先フォルダー",
+        "choose_dir": "フォルダーを選択",
+        "jobs": "同時実行数",
+        "retries": "再試行回数",
+        "title_sub": "軽量な m3u8 ダウンロード・修復クライアント",
         "input_title": "M3U8 入力",
-        "single_hint": "1件入力: 1行に1リンク。入力すると次の行が自動追加されます。",
+        "single_hint": "単体入力: 1 行に 1 リンク。最後の行が埋まると次の行を自動追加します。",
         "single_remove": "削除",
-        "batch_hint": "一括入力: 複数行、または 1 行を | 区切りで入力できます。",
+        "batch_hint": "一括入力: 複数行貼り付け、または 1 行で | 区切りにも対応します。",
         "batch_clear": "クリア",
-        "tab_single": "1件入力",
+        "tab_single": "単体入力",
         "tab_batch": "一括入力",
         "start": "ダウンロード開始",
-        "add_more": "追加",
-        "summary_wait": "開始待機中",
-        "task_progress": "タスク進捗",
+        "add_more": "さらに追加",
+        "summary_wait": "開始待ちです。",
+        "task_progress": "進捗",
         "pause_all": "すべて一時停止",
         "resume_all": "すべて再開",
-        "open_folder": "フォルダを開く",
-        "clear_tasks": "タスククリア",
+        "open_folder": "フォルダーを開く",
+        "clear_tasks": "タスクをクリア",
         "col_idx": "番号",
         "col_name": "出力ファイル",
         "col_status": "状態",
         "col_progress": "進捗",
         "col_detail": "詳細",
         "col_actions": "操作",
-        "version_checking": "⟳ 確認中... v{version}",
-        "version_plain": "⟳ v{version}",
-        "dlg_version": "バージョン確認",
-        "version_repo_missing": "GitHub リポジトリが未設定です。m3u8_gui.py の GITHUB_REPO または M3U8_DOWNLOADER_GITHUB_REPO=owner/repo を設定してください。",
-        "version_latest": "最新バージョンです。\n現在: v{current}\n最新: {latest}",
-        "dlg_new_version": "新しいバージョン",
+        "version_checking": "更新確認中 v{version}",
+        "version_plain": "現在のバージョン v{version}",
+        "dlg_version": "バージョン情報",
+        "version_repo_missing": "GitHub リポジトリがまだ設定されていません。",
+        "version_latest": "すでに最新です。\n現在: v{current}\n最新: {latest}",
+        "dlg_new_version": "新しいバージョンがあります",
         "version_update": "現在: v{current}\n最新: {latest}\n\nReleases ページを開きますか？",
         "version_failed": "更新確認に失敗しました: {err}",
-        "settings_collapse": "設定を折りたたむ",
-        "settings_expand": "設定を展開",
-        "status_waiting": "待機中",
+        "settings_collapse": "設定を閉じる",
+        "settings_expand": "設定を開く",
+        "status_waiting": "準備中",
         "status_downloading": "ダウンロード中",
         "status_done": "完了",
         "status_skipped": "スキップ",
@@ -373,147 +459,96 @@ I18N = {
         "row_resume": "再開",
         "row_play": "再生",
         "row_delete": "削除",
-        "select_output_dir": "保存先フォルダを選択",
+        "select_output_dir": "保存先フォルダーを選択",
         "dlg_confirm_delete": "削除確認",
-        "dlg_confirm_delete_running": "このタスクを削除しますか？実行中の場合は中断されます。",
+        "dlg_confirm_delete_running": "このタスクを削除しますか？実行中のタスクは中断されます。",
         "dlg_confirm_delete_row": "このタスクを一覧から削除しますか？",
         "dlg_confirm_clear": "クリア確認",
-        "dlg_confirm_clear_running": "すべてのタスクをクリアしますか？実行中タスクは中断されます。",
-        "dlg_confirm_clear_idle": "タスクリストをクリアしますか？",
-        "summary_clear_requested": "クリア要求を送信しました。実行中タスクの終了を待っています...",
-        "summary_cleared": "タスクリストをクリアしました",
-        "tip": "ヒント",
-        "tip_need_url": "少なくとも1つの m3u8 リンクを入力してください。",
-        "tip_need_dir": "先に保存先フォルダを選択してください。",
-        "tip_no_running": "実行中タスクがありません。先に開始してください。",
+        "dlg_confirm_clear_running": "すべてのタスクをクリアしますか？実行中のダウンロードは中断されます。",
+        "dlg_confirm_clear_idle": "現在のタスク一覧をクリアしますか？",
+        "summary_clear_requested": "クリアを要求しました。ワーカースレッドの停止を待っています。",
+        "summary_cleared": "タスク一覧をクリアしました。",
+        "tip": "案内",
+        "tip_need_url": "m3u8 リンクを少なくとも 1 つ入力してください。",
+        "tip_need_dir": "先に保存先フォルダーを選択してください。",
+        "tip_no_running": "現在実行中のタスクはありません。",
         "tip_need_more": "追加するリンクを入力してください。",
-        "tip_no_new": "追加できる新規タスクがありません（重複/無効）。",
-        "tip_dir_missing": "保存先フォルダが存在しません。",
-        "tip_file_missing": "ファイルが見つかりません。移動または削除された可能性があります。",
+        "tip_no_new": "追加できる新しいタスクがありません。重複または無効な可能性があります。",
+        "tip_dir_missing": "保存先フォルダーが存在しません。",
+        "tip_file_missing": "ファイルが存在しません。移動または削除された可能性があります。",
         "ffmpeg_missing": "ffmpeg が見つかりません",
-        "summary_added": "{count} 件を追加しました",
-        "summary_preparing": "{count} 件のタスクを準備中...",
+        "summary_added": "{count} 件のタスクを追加しました。",
+        "summary_preparing": "{count} 件のタスクを準備しています。",
         "progress_loading": "読み込み中...",
-        "progress_paused": "停止",
-        "progress_deleted": "削除",
+        "progress_paused": "一時停止",
+        "progress_deleted": "削除済み",
         "progress_failed": "失敗",
         "summary_done": "完了: 成功 {success} | スキップ {skipped} | 失敗 {failed}",
-        "summary_done_file": " | 失敗リスト: {file}",
-        "dlg_batch_done": "タスク完了",
-        "dlg_batch_done_fail": "成功 {success}、スキップ {skipped}、失敗 {failed}。\n失敗リストを出力しました:\n{file}",
-        "dlg_batch_done_ok": "すべて完了。成功 {success}、スキップ {skipped}。",
+        "summary_done_file": " | 失敗一覧: {file}",
+        "dlg_batch_done": "完了",
+        "dlg_batch_done_fail": "成功 {success}、スキップ {skipped}、失敗 {failed}。\n失敗一覧を出力しました:\n{file}",
+        "dlg_batch_done_ok": "すべて完了しました。成功 {success}、スキップ {skipped}。",
         "single_placeholder": "https://example.com/video.m3u8",
-        "batch_placeholder": "例:\nhttps://example.com/episode01.m3u8\n日本語字幕|https://example.com/episode02.m3u8\nhttps://example.com/episode03.m3u8#JP\n\nまたは1行:\nhttps://a.m3u8|https://b.m3u8|https://c.m3u8",
+        "batch_placeholder": "例:\nhttps://example.com/episode01.m3u8\n渚光希|https://example.com/episode02.m3u8\nhttps://example.com/episode03.m3u8#日本語タイトル\n\nまたは 1 行で:\nhttps://a.m3u8|https://b.m3u8|https://c.m3u8",
         "detail_wait_dispatch": "待機中",
-        "detail_retry_wait": "再試行まで待機",
-        "detail_validating": "ファイル検証中",
-        "detail_copy_fallback": "copy 失敗、再エンコード中",
-        "detail_copy_invalid_fix": "copy 成功だが異常、再エンコードで修復中",
-        "detail_finished": "完了",
-        "detail_skipped": "既に同名ファイルがあります",
+        "detail_retry_wait": "再試行待ち",
+        "detail_validating": "ファイルを検証中",
+        "detail_copy_fallback": "copy に失敗、再エンコード中",
+        "detail_copy_invalid_fix": "copy 成功だが不正なファイルのため修復中",
+        "detail_finished": "ダウンロード完了",
+        "detail_skipped": "出力ファイルはすでに存在します",
         "detail_paused": "一時停止",
         "detail_deleted": "削除済み",
         "detail_interrupted": "中断されました",
-        "detail_copy_transcoded": "copy 失敗、再エンコードで完了",
-        "detail_copy_fixed": "copy 異常を再エンコードで修復",
+        "detail_copy_transcoded": "copy に失敗したため自動再エンコードしました",
+        "detail_copy_fixed": "不正な copy を自動再エンコードで修復しました",
         "detail_unknown_err": "不明なエラー",
-        "detail_downloading_try": "ダウンロード中（{attempt}/{total} 回目）",
-        "lang_tip": "言語切替",
+        "detail_downloading_try": "ダウンロード中 ({attempt}/{total})",
+        "lang_tip": "言語を切り替え",
+        "sidebar_caption": "メニュー",
+        "nav_download": "ダウンロード",
+        "nav_directory": "保存先",
+        "nav_repair": "動画修復",
+        "nav_settings": "設定",
+        "page_badge": "Airy Pink",
+        "page_download_title": "動画ダウンロード",
+        "page_download_sub": "m3u8 リンクを入力し、安定してダウンロードしながら出力ファイルを検証します。",
+        "page_directory_title": "保存先フォルダー",
+        "page_directory_sub": "保存先を専用ページに分け、いつでも切り替えや確認をしやすくします。",
+        "page_repair_title": "動画修復",
+        "page_repair_sub": "メタデータが壊れた MP4 を再 mux または再エンコードで修復します。",
+        "page_settings_title": "環境設定",
+        "page_settings_sub": "言語、テーマ、同時実行数、再試行回数をここで調整できます。",
+        "dir_hint": "このフォルダーはダウンロード保存先であり、動画修復の初期選択場所にも使われます。",
+        "repair_file_label": "修復対象ファイル",
+        "repair_choose": "動画を選択",
+        "repair_start": "修復開始",
+        "repair_open_output": "修復結果を開く",
+        "repair_idle": "mp4 ファイルを選択してから修復を開始してください。結果は別名で保存されます。",
+        "settings_lang": "表示言語",
+        "settings_theme": "テーマ",
+        "settings_download": "ダウンロード調整",
+        "settings_version": "更新確認",
+        "theme_light": "ライト",
+        "theme_dark": "ダーク",
+        "menu_file": "ファイル",
+        "menu_tools": "ツール",
+        "action_repair_video": "動画を修復...",
+        "action_exit": "終了",
+        "dlg_confirm_exit": "終了確認",
+        "dlg_confirm_exit_running": "まだダウンロード中のタスクがあります。先に停止して終了しますか？",
+        "summary_exit_stopping": "終了前にダウンロードを停止しています...",
+        "tip_exit_wait_stop": "まだ停止していないタスクがあります。少し待ってから再試行してください。",
+        "dlg_select_repair_file": "修復する動画を選択",
+        "repair_filter": "動画ファイル (*.mp4 *.mkv *.mov *.m4v);;すべてのファイル (*.*)",
+        "tip_repair_missing": "選択した動画ファイルが存在しません。",
+        "repair_result_healthy": "この動画は正常に見えるため、修復は不要です。",
+        "repair_result_remux": "修復完了。新しい remux ファイルを作成しました:\n{file}",
+        "repair_result_transcode": "修復完了。新しい再エンコードファイルを作成しました:\n{file}",
+        "repair_result_failed": "修復に失敗しました。",
+        "repair_result_failed_detail": "修復に失敗しました: {detail}",
     },
 }
-
-
-@dataclass(frozen=True)
-class DownloadTask:
-    index: int
-    url: str
-    output_path: Path
-    referer: str | None = None
-    headers: tuple[str, ...] = ()
-    user_agent: str | None = None
-    source_page_url: str | None = None
-
-
-@dataclass(frozen=True)
-class DownloadOptions:
-    ffmpeg: str
-    ffprobe: str | None
-    retries: int
-    overwrite: bool
-    timeout: int
-    user_agent: str | None
-    referer: str | None
-    headers: list[str]
-    transcode_on_fail: bool
-    validate_after_copy: bool
-
-
-def sanitize_filename(name: str) -> str:
-    cleaned = re.sub(r"[\\/:*?\"<>|\x00-\x1f]+", "_", name).strip().strip(".")
-    return cleaned or "video"
-
-
-def is_probable_url(text: str) -> bool:
-    value = text.strip().lower()
-    return value.startswith("http://") or value.startswith("https://")
-
-
-def parse_url_lines(raw_text: str) -> list[tuple[str | None, str]]:
-    entries: list[tuple[str | None, str]] = []
-    for line in raw_text.splitlines():
-        text = line.strip()
-        if not text or text.startswith("#"):
-            continue
-
-        # Allow paste format like "url1|url2|url3"
-        if "|" in text:
-            parts = [p.strip() for p in text.split("|") if p.strip()]
-            if parts and all(is_probable_url(p) for p in parts):
-                for p in parts:
-                    entries.append((None, p))
-                continue
-
-            name, url = text.split("|", 1)
-            final_url = url.strip()
-            if final_url and is_probable_url(final_url):
-                entries.append((name.strip() or None, final_url))
-                continue
-
-        # Allow multiple URLs separated by spaces in one line.
-        tokens = [t.strip() for t in re.split(r"\s+", text) if t.strip()]
-        if len(tokens) > 1 and all(is_probable_url(t) for t in tokens):
-            for t in tokens:
-                entries.append((None, t))
-            continue
-
-        entries.append((None, text))
-    return entries
-
-
-def build_output_name(index: int, url: str, custom_name: str | None) -> str:
-    if custom_name:
-        base = sanitize_filename(custom_name)
-    else:
-        parsed = urlparse(url)
-        path_parts = [unquote(p) for p in parsed.path.split("/") if p]
-        quality = sanitize_filename(path_parts[-2]) if len(path_parts) >= 2 else ""
-        source_id = sanitize_filename(path_parts[-3]) if len(path_parts) >= 3 else ""
-        fragment = sanitize_filename(unquote(parsed.fragment)) if parsed.fragment else ""
-
-        if fragment and quality:
-            base = f"{fragment}_{quality}"
-        elif fragment:
-            base = fragment
-        elif source_id and quality:
-            base = f"{source_id}_{quality}"
-        elif source_id:
-            base = source_id
-        else:
-            stem = Path(unquote(parsed.path)).stem
-            base = sanitize_filename(stem) if stem else f"video_{index:03d}"
-    if base.lower().endswith(".mp4"):
-        return base
-    return f"{base}.mp4"
 
 
 def create_app_icon(size: int = 256) -> QIcon:
@@ -524,25 +559,36 @@ def create_app_icon(size: int = 256) -> QIcon:
 
     card = QPainterPath()
     card.addRoundedRect(QRectF(6, 6, size - 12, size - 12), 46, 46)
-    painter.fillPath(card, QColor("#8A5BFF"))
+    painter.fillPath(card, QColor("#FF5C7C"))
+
+    glow = QPainterPath()
+    glow.addEllipse(QRectF(size * 0.14, size * 0.12, size * 0.72, size * 0.72))
+    painter.fillPath(glow, QColor(255, 255, 255, 34))
 
     painter.setPen(Qt.NoPen)
     painter.setBrush(QColor("#FFFFFF"))
-    shaft_w = size * 0.10
-    shaft_h = size * 0.25
-    shaft_x = (size - shaft_w) / 2
-    shaft_y = size * 0.30
-    painter.drawRoundedRect(QRectF(shaft_x, shaft_y, shaft_w, shaft_h), 10, 10)
+    petal_specs = [
+        (0.33, 0.28, 0.20, 0.28),
+        (0.47, 0.24, 0.20, 0.30),
+        (0.56, 0.36, 0.19, 0.26),
+        (0.36, 0.40, 0.18, 0.25),
+    ]
+    for x, y, w, h in petal_specs:
+        painter.drawEllipse(QRectF(size * x, size * y, size * w, size * h))
 
-    arrow = QPainterPath()
-    arrow.moveTo(size * 0.34, size * 0.52)
-    arrow.lineTo(size * 0.5, size * 0.70)
-    arrow.lineTo(size * 0.66, size * 0.52)
-    arrow.closeSubpath()
-    painter.fillPath(arrow, QColor("#FFFFFF"))
+    center = QPainterPath()
+    center.addEllipse(QRectF(size * 0.38, size * 0.37, size * 0.24, size * 0.24))
+    painter.fillPath(center, QColor("#FF6E8A"))
 
-    painter.setPen(QPen(QColor("#FFFFFF"), max(6, size // 28)))
-    painter.drawLine(int(size * 0.28), int(size * 0.78), int(size * 0.72), int(size * 0.78))
+    play = QPainterPath()
+    play.moveTo(size * 0.47, size * 0.42)
+    play.lineTo(size * 0.47, size * 0.56)
+    play.lineTo(size * 0.58, size * 0.49)
+    play.closeSubpath()
+    painter.fillPath(play, QColor("#FFFFFF"))
+
+    painter.setPen(QPen(QColor("#FFFFFF"), max(6, size // 34), Qt.SolidLine, Qt.RoundCap))
+    painter.drawLine(int(size * 0.30), int(size * 0.78), int(size * 0.70), int(size * 0.78))
     painter.end()
     return QIcon(pix)
 
@@ -890,6 +936,54 @@ def subprocess_no_window_kwargs() -> dict[str, object]:
     return {"startupinfo": startupinfo}
 
 
+def summarize_process_error(proc: subprocess.CompletedProcess[str]) -> str:
+    text = (proc.stderr or proc.stdout or "").strip()
+    if not text:
+        return ""
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return ""
+    return " | ".join(lines[-3:])[-1500:]
+
+
+def run_ffmpeg_command(cmd: list[str]) -> tuple[bool, str]:
+    proc = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        **subprocess_no_window_kwargs(),
+    )
+    if proc.returncode == 0:
+        return True, ""
+    return False, summarize_process_error(proc) or "ffmpeg execution failed"
+
+
+def build_sidecar_output_path(path: Path, tag: str) -> Path:
+    stem = path.stem or "video"
+    suffix = path.suffix or ".mp4"
+    candidate = path.with_name(f"{stem}.{tag}{suffix}")
+    counter = 1
+    while candidate.exists():
+        candidate = path.with_name(f"{stem}.{tag}.{counter}{suffix}")
+        counter += 1
+    return candidate
+
+
+def cleanup_file(path: Path | None) -> None:
+    if not path:
+        return
+    try:
+        if path.exists():
+            path.unlink()
+    except OSError:
+        pass
+
+
+def replace_file_atomic(source_path: Path, final_path: Path) -> None:
+    final_path.parent.mkdir(parents=True, exist_ok=True)
+    os.replace(str(source_path), str(final_path))
+
+
 def probe_duration_seconds(task: DownloadTask, options: DownloadOptions) -> float | None:
     if not options.ffprobe:
         return None
@@ -935,6 +1029,7 @@ def run_ffmpeg_with_progress(
     duration: float | None,
     on_progress: Callable[[int], None],
     should_abort: Callable[[], str | None] | None = None,
+    output_path: Path | None = None,
 ) -> tuple[bool, str | None]:
     cmd = [
         options.ffmpeg,
@@ -954,7 +1049,7 @@ def run_ffmpeg_with_progress(
     cmd.extend(task_header_args(task, options))
     cmd.extend(["-i", task.url])
     cmd.extend(codec_args)
-    cmd.append(str(task.output_path))
+    cmd.append(str(output_path or task.output_path))
 
     proc = subprocess.Popen(
         cmd,
@@ -1063,6 +1158,9 @@ def validate_output_media(path: Path, options: DownloadOptions) -> tuple[bool, s
             **subprocess_no_window_kwargs(),
         )
         if proc.returncode != 0:
+            detail = summarize_process_error(proc)
+            if detail:
+                return False, detail
             return False, "ffprobe 校验失败"
         try:
             payload = json.loads(proc.stdout or "{}")
@@ -1101,9 +1199,97 @@ def validate_output_media(path: Path, options: DownloadOptions) -> tuple[bool, s
         **subprocess_no_window_kwargs(),
     )
     if test_proc.returncode != 0:
+        detail = summarize_process_error(test_proc)
+        if detail:
+            return False, detail
         return False, "解码测试失败"
 
     return True, None
+
+
+def repair_media_file(source_path: Path, options: DownloadOptions) -> MediaRepairResult:
+    source = source_path.expanduser().resolve()
+    media_ok, media_reason = validate_output_media(source, options)
+    if media_ok:
+        return MediaRepairResult(status="noop")
+
+    final_output = build_sidecar_output_path(source, "fixed")
+    working_output = build_sidecar_output_path(final_output, "working")
+
+    def finish_success(method: str) -> MediaRepairResult:
+        replace_file_atomic(working_output, final_output)
+        return MediaRepairResult(
+            status="ok",
+            output_path=final_output,
+            method=method,
+        )
+
+    cleanup_file(working_output)
+
+    remux_cmd = [
+        options.ffmpeg,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-i",
+        str(source),
+        "-map",
+        "0",
+        "-c",
+        "copy",
+        "-movflags",
+        "+faststart",
+        str(working_output),
+    ]
+    ok, err = run_ffmpeg_command(remux_cmd)
+    if ok:
+        repaired_ok, repaired_reason = validate_output_media(working_output, options)
+        if repaired_ok:
+            return finish_success("remux")
+        err = repaired_reason or "invalid repaired output"
+        cleanup_file(working_output)
+
+    transcode_cmd = [
+        options.ffmpeg,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-i",
+        str(source),
+        "-map",
+        "0:v:0?",
+        "-map",
+        "0:a?",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "23",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+        "-movflags",
+        "+faststart",
+        str(working_output),
+    ]
+    ok2, err2 = run_ffmpeg_command(transcode_cmd)
+    if ok2:
+        repaired_ok2, repaired_reason2 = validate_output_media(working_output, options)
+        if repaired_ok2:
+            return finish_success("transcode")
+        err2 = repaired_reason2 or "invalid transcoded output"
+
+    cleanup_file(working_output)
+    detail = "; ".join(
+        part for part in [media_reason, err or "remux failed", err2 or "transcode failed"] if part
+    )
+    return MediaRepairResult(status="failed", detail=detail)
 
 
 def download_single_task(
@@ -1117,13 +1303,18 @@ def download_single_task(
         return "skipped", "目标文件已存在"
 
     duration = probe_duration_seconds(task, options)
+    working_output = build_sidecar_output_path(task.output_path, "downloading")
 
     def cleanup_partial_output() -> None:
+        cleanup_file(working_output)
+
+    def finalize_output() -> tuple[bool, str | None]:
         try:
-            if task.output_path.exists():
-                task.output_path.unlink()
-        except OSError:
-            pass
+            replace_file_atomic(working_output, task.output_path)
+            return True, None
+        except OSError as exc:
+            cleanup_partial_output()
+            return False, str(exc)
 
     copy_args = [
         "-c",
@@ -1158,46 +1349,72 @@ def download_single_task(
     total_attempts = options.retries + 1
 
     for attempt in range(1, total_attempts + 1):
+        cleanup_partial_output()
         if should_abort:
             abort_status = should_abort()
             if abort_status:
                 cleanup_partial_output()
                 return abort_status, "任务已中断"
+
         on_stage(f"下载中（尝试 {attempt}/{total_attempts}）")
         ok, err = run_ffmpeg_with_progress(
-            task, options, copy_args, duration, on_progress, should_abort
+            task,
+            options,
+            copy_args,
+            duration,
+            on_progress,
+            should_abort,
+            output_path=working_output,
         )
         if ok:
             if not options.validate_after_copy:
-                on_progress(100)
-                return "ok", None
+                finalize_ok, finalize_err = finalize_output()
+                if finalize_ok:
+                    on_progress(100)
+                    return "ok", None
+                return "failed", f"写入最终文件失败: {finalize_err or 'unknown'}"
 
             on_stage("校验文件")
-            media_ok, media_reason = validate_output_media(task.output_path, options)
+            media_ok, media_reason = validate_output_media(working_output, options)
             if media_ok:
-                on_progress(100)
-                return "ok", None
+                finalize_ok, finalize_err = finalize_output()
+                if finalize_ok:
+                    on_progress(100)
+                    return "ok", None
+                return "failed", f"写入最终文件失败: {finalize_err or 'unknown'}"
+
             if options.transcode_on_fail:
                 on_stage("copy 成功但文件异常，转码修复中")
-                try:
-                    if task.output_path.exists():
-                        task.output_path.unlink()
-                except OSError:
-                    pass
+                cleanup_partial_output()
                 ok2, err2 = run_ffmpeg_with_progress(
-                    task, options, transcode_args, duration, on_progress, should_abort
+                    task,
+                    options,
+                    transcode_args,
+                    duration,
+                    on_progress,
+                    should_abort,
+                    output_path=working_output,
                 )
                 if ok2:
                     on_stage("校验文件")
-                    media_ok2, media_reason2 = validate_output_media(task.output_path, options)
+                    media_ok2, media_reason2 = validate_output_media(working_output, options)
                     if media_ok2:
-                        on_progress(100)
-                        return "ok", "copy 文件异常，已自动转码修复"
+                        finalize_ok, finalize_err = finalize_output()
+                        if finalize_ok:
+                            on_progress(100)
+                            return "ok", "copy 文件异常，已自动转码修复"
+                        return "failed", f"写入最终文件失败: {finalize_err or 'unknown'}"
+                    cleanup_partial_output()
                     return "failed", f"转码后校验失败: {media_reason2 or 'unknown'}"
                 if err2 and err2.startswith("__ABORT__:"):
+                    cleanup_partial_output()
                     return err2.split(":", 1)[1], "任务已中断"
-                return "failed", f"copy 成功但文件异常({media_reason}); 转码失败: {err2 or 'unknown'}"
+                cleanup_partial_output()
+                return "failed", f"copy 成功但文件异常({media_reason or 'unknown'}); 转码失败: {err2 or 'unknown'}"
+
+            cleanup_partial_output()
             return "failed", f"copy 成功但文件异常: {media_reason or 'unknown'}"
+
         if err and err.startswith("__ABORT__:"):
             cleanup_partial_output()
             return err.split(":", 1)[1], "任务已中断"
@@ -1205,17 +1422,34 @@ def download_single_task(
         last_error = f"copy 失败: {err or 'unknown'}"
 
         if options.transcode_on_fail:
+            cleanup_partial_output()
             on_stage("copy 失败，转码中")
             ok2, err2 = run_ffmpeg_with_progress(
-                task, options, transcode_args, duration, on_progress, should_abort
+                task,
+                options,
+                transcode_args,
+                duration,
+                on_progress,
+                should_abort,
+                output_path=working_output,
             )
             if ok2:
-                on_progress(100)
-                return "ok", "copy 失败，已自动转码"
-            if err2 and err2.startswith("__ABORT__:"):
+                on_stage("校验文件")
+                media_ok2, media_reason2 = validate_output_media(working_output, options)
+                if media_ok2:
+                    finalize_ok, finalize_err = finalize_output()
+                    if finalize_ok:
+                        on_progress(100)
+                        return "ok", "copy 失败，已自动转码"
+                    return "failed", f"写入最终文件失败: {finalize_err or 'unknown'}"
+                cleanup_partial_output()
+                last_error = f"{last_error}; 转码后校验失败: {media_reason2 or 'unknown'}"
+            elif err2 and err2.startswith("__ABORT__:"):
                 cleanup_partial_output()
                 return err2.split(":", 1)[1], "任务已中断"
-            last_error = f"{last_error}; transcode 失败: {err2 or 'unknown'}"
+            else:
+                cleanup_partial_output()
+                last_error = f"{last_error}; transcode 失败: {err2 or 'unknown'}"
 
         if attempt < total_attempts:
             on_stage("重试等待中")
@@ -1225,9 +1459,11 @@ def download_single_task(
                 if should_abort:
                     abort_status = should_abort()
                     if abort_status:
+                        cleanup_partial_output()
                         return abort_status, "任务已中断"
                 time.sleep(0.2)
 
+    cleanup_partial_output()
     return "failed", last_error
 
 
@@ -1610,7 +1846,7 @@ class MainWindow(QMainWindow):
         self.resize(1240, 830)
         self.setWindowIcon(create_app_icon())
 
-        self.current_theme = "purple"
+        self.current_theme = "light"
         self.current_lang = "zh"
         self.settings_panel_expanded = True
         self.settings_anim: QParallelAnimationGroup | None = None
@@ -1630,8 +1866,13 @@ class MainWindow(QMainWindow):
         self.update_checking = False
         self.local_api_server: LocalApiServer | None = None
         self.local_api_error: str | None = None
+        self.active_page = "download"
+        self.nav_buttons: dict[str, QPushButton] = {}
+        self.page_index_map: dict[str, int] = {}
+        self.repair_output_path: Path | None = None
 
         self._build_ui()
+        self._build_menu_bar()
         self.update_check_done.connect(self._on_update_check_done)
         self.local_api_request.connect(self._handle_local_api_request)
         self._apply_theme(self.current_theme)
@@ -1699,7 +1940,7 @@ class MainWindow(QMainWindow):
             referer=None,
             headers=[],
             transcode_on_fail=True,
-            validate_after_copy=False,
+            validate_after_copy=True,
         )
 
     def _focus_main_window(self) -> str:
@@ -1928,188 +2169,109 @@ class MainWindow(QMainWindow):
         root = QWidget(self)
         root.setObjectName("root")
         self.setCentralWidget(root)
+
         shell = QHBoxLayout(root)
-        shell.setContentsMargins(22, 20, 22, 20)
-        shell.setSpacing(14)
+        shell.setContentsMargins(18, 18, 18, 18)
+        shell.setSpacing(18)
 
-        self.settings_panel = QFrame()
-        self.settings_panel.setObjectName("settingsPanel")
-        self.settings_panel.setMinimumWidth(280)
-        self.settings_panel.setMaximumWidth(280)
-        settings_layout = QVBoxLayout(self.settings_panel)
-        settings_layout.setContentsMargins(10, 12, 10, 12)
-        settings_layout.setSpacing(10)
+        self.sidebar = QFrame()
+        self.sidebar.setObjectName("sidebar")
+        self.sidebar.setFixedWidth(228)
+        sidebar_layout = QVBoxLayout(self.sidebar)
+        sidebar_layout.setContentsMargins(18, 20, 18, 18)
+        sidebar_layout.setSpacing(14)
 
-        self.settings_toggle_btn = QPushButton("")
-        self.settings_toggle_btn.setObjectName("settingsToggleBtn")
-        self.settings_toggle_btn.setMinimumHeight(40)
-        self.settings_toggle_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.settings_toggle_btn.clicked.connect(self._toggle_settings_panel)
-        settings_layout.addWidget(self.settings_toggle_btn, 0, Qt.AlignHCenter)
+        brand_card = QFrame()
+        brand_card.setObjectName("sidebarBrand")
+        brand_layout = QVBoxLayout(brand_card)
+        brand_layout.setContentsMargins(16, 16, 16, 16)
+        brand_layout.setSpacing(6)
 
-        self.settings_content = QWidget()
-        self.settings_content.setObjectName("settingsContent")
-        settings_content_layout = QVBoxLayout(self.settings_content)
-        settings_content_layout.setContentsMargins(6, 4, 6, 4)
-        settings_content_layout.setSpacing(12)
+        self.brand_mark_label = QLabel("桃")
+        self.brand_mark_label.setObjectName("brandMark")
+        self.brand_name_label = QLabel(APP_DISPLAY_NAME)
+        self.brand_name_label.setObjectName("brandName")
+        self.brand_subtitle_label = QLabel(APP_RELEASE_NAME)
+        self.brand_subtitle_label.setObjectName("brandSub")
 
-        self.settings_title_label = QLabel("")
-        self.settings_title_label.setObjectName("sectionTitle")
-        settings_content_layout.addWidget(self.settings_title_label)
+        brand_layout.addWidget(self.brand_mark_label, 0, Qt.AlignLeft)
+        brand_layout.addWidget(self.brand_name_label)
+        brand_layout.addWidget(self.brand_subtitle_label)
+        sidebar_layout.addWidget(brand_card)
 
-        self.output_label = QLabel("")
-        self.output_label.setObjectName("fieldLabel")
-        self.output_dir_input = QLineEdit(str(default_download_dir()))
-        self.output_dir_input.setObjectName("pathInput")
-        self.browse_btn = QPushButton("")
-        self.browse_btn.setObjectName("secondaryBtn")
-        self.browse_btn.clicked.connect(self._choose_output_dir)
+        self.sidebar_caption_label = QLabel("")
+        self.sidebar_caption_label.setObjectName("navCaption")
+        sidebar_layout.addWidget(self.sidebar_caption_label)
 
-        settings_content_layout.addWidget(self.output_label)
-        settings_content_layout.addWidget(self.output_dir_input)
-        settings_content_layout.addWidget(self.browse_btn)
+        self.nav_download_btn = self._create_nav_button("↓", "nav_download", "download")
+        self.nav_directory_btn = self._create_nav_button("□", "nav_directory", "directory")
+        self.nav_repair_btn = self._create_nav_button("✦", "nav_repair", "repair")
+        self.nav_settings_btn = self._create_nav_button("⚙", "nav_settings", "settings")
 
-        self.jobs_label = QLabel("")
-        self.jobs_label.setObjectName("fieldLabel")
-        self.jobs_input = QSpinBox()
-        self.jobs_input.setRange(10, 200)
-        self.jobs_input.setSingleStep(10)
-        self.jobs_input.setValue(20)
-        self.jobs_input.setObjectName("spinBox")
-        self.jobs_input.setButtonSymbols(QSpinBox.NoButtons)
-        self.jobs_input.setAlignment(Qt.AlignCenter)
+        sidebar_layout.addWidget(self.nav_download_btn)
+        sidebar_layout.addWidget(self.nav_directory_btn)
+        sidebar_layout.addWidget(self.nav_repair_btn)
+        sidebar_layout.addWidget(self.nav_settings_btn)
+        sidebar_layout.addStretch(1)
 
-        self.jobs_minus_btn = QPushButton("−")
-        self.jobs_minus_btn.setObjectName("stepBtn")
-        self.jobs_minus_btn.setFixedSize(34, 34)
-        self.jobs_minus_btn.clicked.connect(
-            lambda: self.jobs_input.setValue(
-                max(self.jobs_input.minimum(), self.jobs_input.value() - 10)
-            )
-        )
+        self.sidebar_version_label = QLabel(f"v{APP_VERSION}")
+        self.sidebar_version_label.setObjectName("sideVersion")
+        sidebar_layout.addWidget(self.sidebar_version_label, 0, Qt.AlignLeft)
 
-        self.jobs_plus_btn = QPushButton("+")
-        self.jobs_plus_btn.setObjectName("stepBtn")
-        self.jobs_plus_btn.setFixedSize(34, 34)
-        self.jobs_plus_btn.clicked.connect(
-            lambda: self.jobs_input.setValue(
-                min(self.jobs_input.maximum(), self.jobs_input.value() + 10)
-            )
-        )
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(16)
 
-        jobs_row = QHBoxLayout()
-        jobs_row.setSpacing(8)
-        jobs_row.addWidget(self.jobs_minus_btn)
-        jobs_row.addWidget(self.jobs_input, 1)
-        jobs_row.addWidget(self.jobs_plus_btn)
+        self.header_card = QFrame()
+        self.header_card.setObjectName("headerCard")
+        header_layout = QVBoxLayout(self.header_card)
+        header_layout.setContentsMargins(28, 24, 28, 24)
+        header_layout.setSpacing(6)
 
-        self.retries_label = QLabel("")
-        self.retries_label.setObjectName("fieldLabel")
-        self.retries_input = QSpinBox()
-        self.retries_input.setRange(0, 10)
-        self.retries_input.setValue(2)
-        self.retries_input.setObjectName("spinBox")
-        self.retries_input.setButtonSymbols(QSpinBox.NoButtons)
-        self.retries_input.setAlignment(Qt.AlignCenter)
+        self.page_badge_label = QLabel("")
+        self.page_badge_label.setObjectName("pageBadge")
+        self.page_title_label = QLabel("")
+        self.page_title_label.setObjectName("pageTitle")
+        self.page_subtitle_label = QLabel("")
+        self.page_subtitle_label.setObjectName("pageSubtitle")
+        self.page_subtitle_label.setWordWrap(True)
 
-        self.retries_minus_btn = QPushButton("−")
-        self.retries_minus_btn.setObjectName("stepBtn")
-        self.retries_minus_btn.setFixedSize(34, 34)
-        self.retries_minus_btn.clicked.connect(
-            lambda: self.retries_input.setValue(
-                max(self.retries_input.minimum(), self.retries_input.value() - 1)
-            )
-        )
+        header_layout.addWidget(self.page_badge_label, 0, Qt.AlignLeft)
+        header_layout.addWidget(self.page_title_label)
+        header_layout.addWidget(self.page_subtitle_label)
+        content_layout.addWidget(self.header_card)
 
-        self.retries_plus_btn = QPushButton("+")
-        self.retries_plus_btn.setObjectName("stepBtn")
-        self.retries_plus_btn.setFixedSize(34, 34)
-        self.retries_plus_btn.clicked.connect(
-            lambda: self.retries_input.setValue(
-                min(self.retries_input.maximum(), self.retries_input.value() + 1)
-            )
-        )
+        self.page_stack = QStackedWidget()
+        self.page_stack.setObjectName("pageStack")
+        content_layout.addWidget(self.page_stack, 1)
 
-        retries_row = QHBoxLayout()
-        retries_row.setSpacing(8)
-        retries_row.addWidget(self.retries_minus_btn)
-        retries_row.addWidget(self.retries_input, 1)
-        retries_row.addWidget(self.retries_plus_btn)
-
-        settings_content_layout.addWidget(self.jobs_label)
-        settings_content_layout.addLayout(jobs_row)
-        settings_content_layout.addWidget(self.retries_label)
-        settings_content_layout.addLayout(retries_row)
-        settings_content_layout.addStretch(1)
-        settings_layout.addWidget(self.settings_content, 1)
-
-        self.version_btn = QPushButton()
-        self.version_btn.setObjectName("versionBtn")
-        self.version_btn.setMinimumHeight(34)
-        self.version_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.version_btn.clicked.connect(self._check_updates)
-        settings_layout.addWidget(self.version_btn, 0, Qt.AlignBottom | Qt.AlignHCenter)
-
-        right = QWidget()
-        right_layout = QVBoxLayout(right)
-        right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(14)
-
-        header = QFrame()
-        header.setObjectName("headerCard")
-        header_layout = QHBoxLayout(header)
-        header_layout.setContentsMargins(24, 16, 24, 16)
-        header_layout.setSpacing(12)
-
-        self.title_label = QLabel(APP_DISPLAY_NAME)
-        self.title_label.setObjectName("titleLabel")
-        self.subtitle_label = QLabel("")
-        self.subtitle_label.setObjectName("subtitleLabel")
-        self.lang_select = QComboBox()
-        self.lang_select.setObjectName("langSelect")
-        self.lang_select.setFixedHeight(38)
-        self.lang_select.setMinimumWidth(112)
-        for code in LANG_ORDER:
-            self.lang_select.addItem(LANG_LABEL.get(code, code), code)
-        self.lang_select.currentIndexChanged.connect(self._on_language_changed)
-        self.theme_btn = QPushButton("◐")
-        self.theme_btn.setObjectName("themeIconBtn")
-        self.theme_btn.setFixedSize(38, 38)
-        self.theme_btn.clicked.connect(self._toggle_theme)
-
-        header_layout.addWidget(self.title_label, 0, Qt.AlignVCenter)
-        header_layout.addWidget(self.subtitle_label, 0, Qt.AlignVCenter)
-        header_layout.addStretch(1)
-        header_layout.addWidget(self.lang_select, 0, Qt.AlignRight | Qt.AlignVCenter)
-        header_layout.addWidget(self.theme_btn, 0, Qt.AlignRight | Qt.AlignVCenter)
-
-        right_layout.addWidget(header)
+        download_page = QWidget()
+        download_layout = QVBoxLayout(download_page)
+        download_layout.setContentsMargins(0, 0, 0, 0)
+        download_layout.setSpacing(16)
 
         input_card = QFrame()
         input_card.setObjectName("card")
         input_layout = QVBoxLayout(input_card)
-        input_layout.setContentsMargins(20, 18, 20, 18)
-        input_layout.setSpacing(10)
+        input_layout.setContentsMargins(22, 20, 22, 20)
+        input_layout.setSpacing(12)
 
         self.input_title_label = QLabel("")
         self.input_title_label.setObjectName("sectionTitle")
 
         self.input_tabs = QTabWidget()
         self.input_tabs.setObjectName("inputTabs")
-        self.input_tabs.setMinimumHeight(190)
+        self.input_tabs.setMinimumHeight(210)
 
         single_tab = QWidget()
         single_layout = QVBoxLayout(single_tab)
         single_layout.setContentsMargins(6, 8, 6, 6)
         single_layout.setSpacing(8)
 
-        single_hint_row = QHBoxLayout()
-        single_hint_row.setContentsMargins(0, 0, 0, 0)
-        single_hint_row.setSpacing(8)
         self.single_hint_label = QLabel("")
         self.single_hint_label.setObjectName("inputHintLabel")
-        single_hint_row.addWidget(self.single_hint_label, 1)
-        single_layout.addLayout(single_hint_row)
+        single_layout.addWidget(self.single_hint_label)
 
         self.single_scroll = QScrollArea()
         self.single_scroll.setObjectName("singleScroll")
@@ -2134,30 +2296,28 @@ class MainWindow(QMainWindow):
         batch_layout.setContentsMargins(6, 8, 6, 10)
         batch_layout.setSpacing(8)
 
-        batch_hint_row = QHBoxLayout()
-        batch_hint_row.setContentsMargins(0, 0, 0, 0)
-        batch_hint_row.setSpacing(8)
+        batch_head = QHBoxLayout()
+        batch_head.setContentsMargins(0, 0, 0, 0)
+        batch_head.setSpacing(8)
         self.batch_hint_label = QLabel("")
         self.batch_hint_label.setObjectName("inputHintLabel")
         self.batch_clear_btn = QPushButton("")
         self.batch_clear_btn.setObjectName("miniBtn")
-        self.batch_clear_btn.setMinimumHeight(24)
         self.batch_clear_btn.clicked.connect(lambda: self.url_input.clear())
-        batch_hint_row.addWidget(self.batch_hint_label, 1)
-        batch_hint_row.addWidget(self.batch_clear_btn, 0, Qt.AlignRight)
+        batch_head.addWidget(self.batch_hint_label, 1)
+        batch_head.addWidget(self.batch_clear_btn, 0, Qt.AlignRight)
+
         self.url_input = QTextEdit()
         self.url_input.setObjectName("urlInput")
-        self.url_input.setMinimumHeight(140)
-        batch_layout.addLayout(batch_hint_row)
+        self.url_input.setMinimumHeight(150)
+        batch_layout.addLayout(batch_head)
         batch_layout.addWidget(self.url_input, 1)
-        batch_layout.addSpacing(2)
 
         self.input_tabs.addTab(single_tab, "")
         self.input_tabs.addTab(batch_tab, "")
-
         input_layout.addWidget(self.input_title_label)
         input_layout.addWidget(self.input_tabs)
-        right_layout.addWidget(input_card)
+        download_layout.addWidget(input_card)
 
         action_row = QHBoxLayout()
         action_row.setSpacing(10)
@@ -2175,17 +2335,17 @@ class MainWindow(QMainWindow):
 
         self.summary_label = QLabel("")
         self.summary_label.setObjectName("summaryLabel")
+        self.summary_label.setWordWrap(True)
 
         action_row.addWidget(self.start_btn, 0)
         action_row.addWidget(self.add_more_btn, 0)
         action_row.addWidget(self.summary_label, 1)
-        right_layout.addLayout(action_row)
+        download_layout.addLayout(action_row)
 
         table_card = QFrame()
         table_card.setObjectName("card")
-        table_card.setMinimumHeight(440)
         table_layout = QVBoxLayout(table_card)
-        table_layout.setContentsMargins(16, 12, 16, 14)
+        table_layout.setContentsMargins(18, 14, 18, 16)
         table_layout.setSpacing(10)
 
         table_head = QHBoxLayout()
@@ -2230,38 +2390,239 @@ class MainWindow(QMainWindow):
         header_view.setSectionResizeMode(3, QHeaderView.ResizeToContents)
         header_view.setSectionResizeMode(4, QHeaderView.Interactive)
         header_view.setSectionResizeMode(5, QHeaderView.Interactive)
-        self.table.setColumnWidth(4, 230)
-        self.table.setColumnWidth(5, 200)
+        self.table.setColumnWidth(4, 260)
+        self.table.setColumnWidth(5, 208)
 
         table_layout.addLayout(table_head)
         table_layout.addWidget(self.table)
-        right_layout.addWidget(table_card, 1)
+        download_layout.addWidget(table_card, 1)
 
-        shell.addWidget(self.settings_panel, 0)
-        shell.addWidget(right, 1)
+        directory_page = QWidget()
+        directory_layout = QVBoxLayout(directory_page)
+        directory_layout.setContentsMargins(0, 0, 0, 0)
+        directory_layout.setSpacing(16)
 
-        self._set_settings_panel_expanded(True, animate=False)
+        directory_card = QFrame()
+        directory_card.setObjectName("card")
+        directory_card_layout = QVBoxLayout(directory_card)
+        directory_card_layout.setContentsMargins(24, 24, 24, 24)
+        directory_card_layout.setSpacing(12)
+
+        self.output_label = QLabel("")
+        self.output_label.setObjectName("fieldLabel")
+        self.output_dir_input = QLineEdit(str(default_download_dir()))
+        self.output_dir_input.setObjectName("pathInput")
+        self.output_dir_input.setMinimumHeight(44)
+
+        directory_actions = QHBoxLayout()
+        directory_actions.setSpacing(10)
+        self.browse_btn = QPushButton("")
+        self.browse_btn.setObjectName("secondaryBtn")
+        self.browse_btn.setMinimumHeight(42)
+        self.browse_btn.clicked.connect(self._choose_output_dir)
+        self.directory_open_btn = QPushButton("")
+        self.directory_open_btn.setObjectName("tableActionBtn")
+        self.directory_open_btn.setMinimumHeight(42)
+        self.directory_open_btn.clicked.connect(self._open_download_folder)
+        directory_actions.addWidget(self.browse_btn)
+        directory_actions.addWidget(self.directory_open_btn)
+        directory_actions.addStretch(1)
+
+        self.dir_hint_label = QLabel("")
+        self.dir_hint_label.setObjectName("hintText")
+        self.dir_hint_label.setWordWrap(True)
+
+        directory_card_layout.addWidget(self.output_label)
+        directory_card_layout.addWidget(self.output_dir_input)
+        directory_card_layout.addLayout(directory_actions)
+        directory_card_layout.addWidget(self.dir_hint_label)
+        directory_layout.addWidget(directory_card)
+        directory_layout.addStretch(1)
+
+        repair_page = QWidget()
+        repair_layout = QVBoxLayout(repair_page)
+        repair_layout.setContentsMargins(0, 0, 0, 0)
+        repair_layout.setSpacing(16)
+
+        repair_card = QFrame()
+        repair_card.setObjectName("card")
+        repair_card_layout = QVBoxLayout(repair_card)
+        repair_card_layout.setContentsMargins(24, 24, 24, 24)
+        repair_card_layout.setSpacing(12)
+
+        self.repair_file_label = QLabel("")
+        self.repair_file_label.setObjectName("fieldLabel")
+        self.repair_path_input = QLineEdit()
+        self.repair_path_input.setObjectName("pathInput")
+        self.repair_path_input.setMinimumHeight(44)
+        self.repair_path_input.setPlaceholderText("C:/video/example.mp4")
+
+        repair_actions = QHBoxLayout()
+        repair_actions.setSpacing(10)
+        self.repair_choose_btn = QPushButton("")
+        self.repair_choose_btn.setObjectName("secondaryBtn")
+        self.repair_choose_btn.setMinimumHeight(42)
+        self.repair_choose_btn.clicked.connect(self._choose_repair_file)
+        self.repair_start_btn = QPushButton("")
+        self.repair_start_btn.setObjectName("primaryBtn")
+        self.repair_start_btn.setMinimumHeight(42)
+        self.repair_start_btn.clicked.connect(self._run_repair_from_page)
+        self.repair_open_btn = QPushButton("")
+        self.repair_open_btn.setObjectName("tableActionBtn")
+        self.repair_open_btn.setMinimumHeight(42)
+        self.repair_open_btn.setEnabled(False)
+        self.repair_open_btn.clicked.connect(self._open_repaired_output)
+        repair_actions.addWidget(self.repair_choose_btn)
+        repair_actions.addWidget(self.repair_start_btn)
+        repair_actions.addWidget(self.repair_open_btn)
+        repair_actions.addStretch(1)
+
+        self.repair_status_label = QLabel("")
+        self.repair_status_label.setObjectName("hintText")
+        self.repair_status_label.setWordWrap(True)
+
+        repair_card_layout.addWidget(self.repair_file_label)
+        repair_card_layout.addWidget(self.repair_path_input)
+        repair_card_layout.addLayout(repair_actions)
+        repair_card_layout.addWidget(self.repair_status_label)
+        repair_layout.addWidget(repair_card)
+        repair_layout.addStretch(1)
+
+        settings_page = QWidget()
+        settings_layout = QVBoxLayout(settings_page)
+        settings_layout.setContentsMargins(0, 0, 0, 0)
+        settings_layout.setSpacing(16)
+
+        interface_card = QFrame()
+        interface_card.setObjectName("card")
+        interface_layout = QVBoxLayout(interface_card)
+        interface_layout.setContentsMargins(24, 24, 24, 24)
+        interface_layout.setSpacing(12)
+
+        self.settings_title_label = QLabel("")
+        self.settings_title_label.setObjectName("sectionTitle")
+
+        self.lang_label = QLabel("")
+        self.lang_label.setObjectName("fieldLabel")
+        self.lang_select = QComboBox()
+        self.lang_select.setObjectName("choiceSelect")
+        self.lang_select.setMinimumHeight(42)
+        for code in LANG_ORDER:
+            self.lang_select.addItem(LANG_LABEL.get(code, code), code)
+        self.lang_select.currentIndexChanged.connect(self._on_language_changed)
+
+        self.theme_label = QLabel("")
+        self.theme_label.setObjectName("fieldLabel")
+        self.theme_select = QComboBox()
+        self.theme_select.setObjectName("choiceSelect")
+        self.theme_select.setMinimumHeight(42)
+        self.theme_select.addItem("", "light")
+        self.theme_select.addItem("", "dark")
+        self.theme_select.currentIndexChanged.connect(self._on_theme_changed)
+
+        interface_layout.addWidget(self.settings_title_label)
+        interface_layout.addWidget(self.lang_label)
+        interface_layout.addWidget(self.lang_select)
+        interface_layout.addWidget(self.theme_label)
+        interface_layout.addWidget(self.theme_select)
+        settings_layout.addWidget(interface_card)
+
+        tuning_card = QFrame()
+        tuning_card.setObjectName("card")
+        tuning_layout = QVBoxLayout(tuning_card)
+        tuning_layout.setContentsMargins(24, 24, 24, 24)
+        tuning_layout.setSpacing(12)
+
+        self.settings_download_label = QLabel("")
+        self.settings_download_label.setObjectName("sectionTitle")
+
+        self.jobs_label = QLabel("")
+        self.jobs_label.setObjectName("fieldLabel")
+        self.jobs_input = QSpinBox()
+        self.jobs_input.setObjectName("spinBox")
+        self.jobs_input.setRange(10, 200)
+        self.jobs_input.setSingleStep(10)
+        self.jobs_input.setValue(20)
+        self.jobs_input.setMinimumHeight(42)
+
+        self.retries_label = QLabel("")
+        self.retries_label.setObjectName("fieldLabel")
+        self.retries_input = QSpinBox()
+        self.retries_input.setObjectName("spinBox")
+        self.retries_input.setRange(0, 10)
+        self.retries_input.setValue(2)
+        self.retries_input.setMinimumHeight(42)
+
+        self.settings_version_label = QLabel("")
+        self.settings_version_label.setObjectName("fieldLabel")
+        self.version_btn = QPushButton("")
+        self.version_btn.setObjectName("secondaryBtn")
+        self.version_btn.setMinimumHeight(42)
+        self.version_btn.clicked.connect(self._check_updates)
+
+        tuning_layout.addWidget(self.settings_download_label)
+        tuning_layout.addWidget(self.jobs_label)
+        tuning_layout.addWidget(self.jobs_input)
+        tuning_layout.addWidget(self.retries_label)
+        tuning_layout.addWidget(self.retries_input)
+        tuning_layout.addWidget(self.settings_version_label)
+        tuning_layout.addWidget(self.version_btn)
+        settings_layout.addWidget(tuning_card)
+        settings_layout.addStretch(1)
+
+        self.page_index_map = {
+            "download": self.page_stack.addWidget(download_page),
+            "directory": self.page_stack.addWidget(directory_page),
+            "repair": self.page_stack.addWidget(repair_page),
+            "settings": self.page_stack.addWidget(settings_page),
+        }
+
+        shell.addWidget(self.sidebar, 0)
+        shell.addWidget(content, 1)
+
+        self._refresh_theme_options()
+        self._set_active_page("download")
+
+    def _create_nav_button(self, icon_text: str, text_key: str, page_key: str) -> QPushButton:
+        btn = QPushButton("")
+        btn.setObjectName("navButton")
+        btn.setCheckable(True)
+        btn.setAutoExclusive(True)
+        btn.setProperty("nav_icon", icon_text)
+        btn.setProperty("text_key", text_key)
+        btn.clicked.connect(lambda checked=False, key=page_key: self._set_active_page(key))
+        self.nav_buttons[page_key] = btn
+        return btn
+
+    def _build_menu_bar(self) -> None:
+        self.file_menu = self.menuBar().addMenu("")
+        self.tools_menu = self.menuBar().addMenu("")
+
+        self.repair_video_action = QAction(self)
+        self.repair_video_action.triggered.connect(self._repair_video_from_menu)
+        self.tools_menu.addAction(self.repair_video_action)
+
+        self.exit_action = QAction(self)
+        self.exit_action.triggered.connect(self.close)
+        self.file_menu.addAction(self.exit_action)
 
     def _animate_window_enter(self) -> None:
         self.setWindowOpacity(0.0)
         anim = QPropertyAnimation(self, b"windowOpacity", self)
         anim.setStartValue(0.0)
         anim.setEndValue(1.0)
-        anim.setDuration(420)
+        anim.setDuration(360)
         anim.setEasingCurve(QEasingCurve.OutCubic)
         anim.start(QPropertyAnimation.DeleteWhenStopped)
 
     def _animate_theme_switch(self) -> None:
-        self.setWindowOpacity(0.92)
+        self.setWindowOpacity(0.95)
         anim = QPropertyAnimation(self, b"windowOpacity", self)
-        anim.setStartValue(0.92)
+        anim.setStartValue(0.95)
         anim.setEndValue(1.0)
-        anim.setDuration(280)
+        anim.setDuration(220)
         anim.setEasingCurve(QEasingCurve.OutCubic)
         anim.start(QPropertyAnimation.DeleteWhenStopped)
-
-    def _toggle_settings_panel(self) -> None:
-        self._set_settings_panel_expanded(not self.settings_panel_expanded, animate=True)
 
     def _on_language_changed(self, index: int) -> None:
         code = self.lang_select.itemData(index)
@@ -2270,14 +2631,59 @@ class MainWindow(QMainWindow):
         self.current_lang = code
         self._refresh_i18n_texts()
 
+    def _on_theme_changed(self, index: int) -> None:
+        theme = self.theme_select.itemData(index)
+        if not isinstance(theme, str) or theme == self.current_theme:
+            return
+        self.current_theme = theme
+        self._apply_theme(self.current_theme)
+        self._animate_theme_switch()
+
+    def _refresh_theme_options(self) -> None:
+        if not hasattr(self, "theme_select"):
+            return
+        current = self.current_theme
+        self.theme_select.blockSignals(True)
+        light_index = max(0, self.theme_select.findData("light"))
+        dark_index = max(0, self.theme_select.findData("dark"))
+        self.theme_select.setItemText(light_index, self.t("theme_light"))
+        self.theme_select.setItemText(dark_index, self.t("theme_dark"))
+        target = self.theme_select.findData(current)
+        if target >= 0:
+            self.theme_select.setCurrentIndex(target)
+        self.theme_select.blockSignals(False)
+
+    def _set_active_page(self, page_key: str) -> None:
+        index = self.page_index_map.get(page_key)
+        if index is None:
+            return
+        self.active_page = page_key
+        self.page_stack.setCurrentIndex(index)
+        for key, btn in self.nav_buttons.items():
+            btn.setChecked(key == page_key)
+        self._update_page_header()
+
+    def _update_page_header(self) -> None:
+        page_meta = {
+            "download": ("page_download_title", "page_download_sub"),
+            "directory": ("page_directory_title", "page_directory_sub"),
+            "repair": ("page_repair_title", "page_repair_sub"),
+            "settings": ("page_settings_title", "page_settings_sub"),
+        }
+        title_key, sub_key = page_meta.get(self.active_page, page_meta["download"])
+        self.page_badge_label.setText(self.t("page_badge"))
+        self.page_title_label.setText(self.t(title_key))
+        self.page_subtitle_label.setText(self.t(sub_key))
+
     def _refresh_i18n_texts(self) -> None:
-        self.settings_title_label.setText(self.t("settings_title"))
-        self.output_label.setText(self.t("output_dir"))
-        self.browse_btn.setText(self.t("choose_dir"))
-        self.jobs_label.setText(self.t("jobs"))
-        self.retries_label.setText(self.t("retries"))
-        self.title_label.setText(APP_DISPLAY_NAME)
-        self.subtitle_label.setText(self.t("title_sub"))
+        self.brand_name_label.setText(APP_DISPLAY_NAME)
+        self.brand_subtitle_label.setText(APP_RELEASE_NAME)
+        self.sidebar_caption_label.setText(self.t("sidebar_caption"))
+        for key, btn in self.nav_buttons.items():
+            icon_text = btn.property("nav_icon") or ""
+            text_key = btn.property("text_key") or ""
+            btn.setText(f"{icon_text}  {self.t(str(text_key))}")
+
         self.input_title_label.setText(self.t("input_title"))
         self.single_hint_label.setText(self.t("single_hint"))
         self.batch_hint_label.setText(self.t("batch_hint"))
@@ -2288,7 +2694,9 @@ class MainWindow(QMainWindow):
         self.pause_all_btn.setText(self.t("resume_all") if self.pause_all_active else self.t("pause_all"))
         self.open_folder_btn.setText(self.t("open_folder"))
         self.clear_tasks_btn.setText(self.t("clear_tasks"))
-        self.summary_label.setText(self.summary_label.text() or self.t("summary_wait"))
+        if not self.summary_label.text():
+            self.summary_label.setText(self.t("summary_wait"))
+
         self.input_tabs.setTabText(0, self.t("tab_single"))
         self.input_tabs.setTabText(1, self.t("tab_batch"))
         self.url_input.setPlaceholderText(self.t("batch_placeholder"))
@@ -2296,11 +2704,42 @@ class MainWindow(QMainWindow):
             line.setPlaceholderText(self.t("single_placeholder"))
         for delete_btn in self.single_delete_btns.values():
             delete_btn.setText(self.t("row_delete"))
+
+        self.output_label.setText(self.t("output_dir"))
+        self.browse_btn.setText(self.t("choose_dir"))
+        self.directory_open_btn.setText(self.t("open_folder"))
+        self.dir_hint_label.setText(self.t("dir_hint"))
+
+        self.repair_file_label.setText(self.t("repair_file_label"))
+        self.repair_choose_btn.setText(self.t("repair_choose"))
+        self.repair_start_btn.setText(self.t("repair_start"))
+        self.repair_open_btn.setText(self.t("repair_open_output"))
+        if not self.repair_status_label.text():
+            self.repair_status_label.setText(self.t("repair_idle"))
+
+        self.settings_title_label.setText(self.t("settings_title"))
+        self.lang_label.setText(self.t("settings_lang"))
+        self.theme_label.setText(self.t("settings_theme"))
+        self.settings_download_label.setText(self.t("settings_download"))
+        self.jobs_label.setText(self.t("jobs"))
+        self.retries_label.setText(self.t("retries"))
+        self.settings_version_label.setText(self.t("settings_version"))
+
         self.lang_select.blockSignals(True)
+        for code in LANG_ORDER:
+            idx = self.lang_select.findData(code)
+            if idx >= 0:
+                self.lang_select.setItemText(idx, LANG_LABEL.get(code, code))
         target_index = max(0, self.lang_select.findData(self.current_lang))
         self.lang_select.setCurrentIndex(target_index)
         self.lang_select.setToolTip(self.t("lang_tip"))
         self.lang_select.blockSignals(False)
+        self._refresh_theme_options()
+
+        self.file_menu.setTitle(self.t("menu_file"))
+        self.tools_menu.setTitle(self.t("menu_tools"))
+        self.repair_video_action.setText(self.t("action_repair_video"))
+        self.exit_action.setText(self.t("action_exit"))
 
         self.table.setHorizontalHeaderLabels(
             [
@@ -2315,10 +2754,7 @@ class MainWindow(QMainWindow):
 
         for idx, pause_btn in self.pause_btn_by_index.items():
             status = self.task_status_by_index.get(idx, "waiting")
-            if status == "paused":
-                pause_btn.setText(self.t("row_resume"))
-            else:
-                pause_btn.setText(self.t("row_pause"))
+            pause_btn.setText(self.t("row_resume") if status == "paused" else self.t("row_pause"))
         for play_btn in self.play_btn_by_index.values():
             play_btn.setText(self.t("row_play"))
         for delete_btn in self.delete_btn_by_index.values():
@@ -2349,7 +2785,7 @@ class MainWindow(QMainWindow):
             if detail_item:
                 detail_item.setText(self._localize_detail(detail_item.text()))
 
-        self._set_settings_panel_expanded(self.settings_panel_expanded, animate=False)
+        self._update_page_header()
         self._update_version_btn_text()
 
     def _localize_detail(self, detail: str) -> str:
@@ -2379,23 +2815,16 @@ class MainWindow(QMainWindow):
         return text
 
     def _update_version_btn_text(self) -> None:
-        if self.settings_panel_expanded:
-            if self.update_checking:
-                self.version_btn.setText(self.t("version_checking", version=APP_VERSION))
-            else:
-                self.version_btn.setText(self.t("version_plain", version=APP_VERSION))
+        if self.update_checking:
+            self.version_btn.setText(self.t("version_checking", version=APP_VERSION))
         else:
-            self.version_btn.setText("⟳")
+            self.version_btn.setText(self.t("version_plain", version=APP_VERSION))
 
     def _check_updates(self) -> None:
         if self.update_checking:
             return
         if not GITHUB_REPO or GITHUB_REPO.startswith("YOUR_GITHUB_OWNER/"):
-            QMessageBox.information(
-                self,
-                self.t("dlg_version"),
-                self.t("version_repo_missing"),
-            )
+            QMessageBox.information(self, self.t("dlg_version"), self.t("version_repo_missing"))
             return
 
         self.update_checking = True
@@ -2444,657 +2873,527 @@ class MainWindow(QMainWindow):
 
         QMessageBox.warning(self, self.t("dlg_version"), self.t("version_failed", err=latest))
 
-    def _set_settings_panel_expanded(self, expanded: bool, animate: bool) -> None:
-        self.settings_panel_expanded = expanded
-        target = 280 if expanded else 72
-        current = self.settings_panel.maximumWidth()
-
-        if self.settings_anim:
-            try:
-                self.settings_anim.stop()
-            except RuntimeError:
-                pass
-            self.settings_anim = None
-
-        if animate:
-            group = QParallelAnimationGroup(self)
-            for prop in (b"minimumWidth", b"maximumWidth"):
-                anim = QPropertyAnimation(self.settings_panel, prop, group)
-                anim.setStartValue(current)
-                anim.setEndValue(target)
-                anim.setDuration(220)
-                anim.setEasingCurve(QEasingCurve.OutCubic)
-                group.addAnimation(anim)
-            group.finished.connect(lambda: setattr(self, "settings_anim", None))
-            group.start()
-            self.settings_anim = group
-        else:
-            self.settings_panel.setMinimumWidth(target)
-            self.settings_panel.setMaximumWidth(target)
-
-        self.settings_content.setVisible(expanded)
-        self.settings_toggle_btn.setText(self.t("settings_toggle") if expanded else "⚙")
-        self.settings_toggle_btn.setToolTip(self.t("settings_collapse") if expanded else self.t("settings_expand"))
-        self._update_version_btn_text()
-        if expanded:
-            self.settings_toggle_btn.setMinimumSize(0, 40)
-            self.settings_toggle_btn.setMaximumHeight(40)
-            self.settings_toggle_btn.setMaximumWidth(16777215)
-            self.version_btn.setMinimumSize(0, 34)
-            self.version_btn.setMaximumHeight(34)
-            self.version_btn.setMaximumWidth(16777215)
-            self.settings_toggle_btn.setStyleSheet("")
-            self.version_btn.setStyleSheet("")
-        else:
-            self.settings_toggle_btn.setMinimumSize(40, 40)
-            self.settings_toggle_btn.setMaximumSize(40, 40)
-            self.version_btn.setMinimumSize(40, 40)
-            self.version_btn.setMaximumSize(40, 40)
-            self.settings_toggle_btn.setStyleSheet(
-                "padding: 0px; text-align: center; font-size: 20px;"
-            )
-            self.version_btn.setStyleSheet(
-                "padding: 0px; text-align: center; font-size: 18px;"
-            )
-
     def _apply_theme(self, theme: str) -> None:
-        if theme == "purple":
+        if theme == "dark":
             stylesheet = """
                 #root {
-                    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                        stop:0 #231338, stop:1 #171025);
+                    background: #151515;
                 }
-                QFrame#headerCard {
-                    border-radius: 18px;
-                    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                        stop:0 #7B43FF, stop:1 #A66BFF);
+                QMenuBar {
+                    background: #1a1a1a;
+                    color: #f7f2f4;
+                    border-bottom: 1px solid #2a2a2a;
                 }
-                QFrame#settingsPanel {
-                    border-radius: 16px;
-                    background: rgba(255, 255, 255, 0.08);
-                    border: 1px solid rgba(255, 255, 255, 0.16);
+                QMenuBar::item:selected {
+                    background: #2a2a2a;
                 }
-                QPushButton#settingsToggleBtn {
-                    border-radius: 11px;
-                    border: 1px solid rgba(255, 255, 255, 0.28);
-                    background: rgba(255, 255, 255, 0.14);
-                    color: #F4EDFF;
-                    padding: 8px 12px;
-                    font-size: 16px;
+                QMenu {
+                    background: #202020;
+                    color: #f7f2f4;
+                    border: 1px solid #343434;
+                }
+                QMenu::item:selected {
+                    background: #ff5d7d;
+                }
+                QFrame#sidebar {
+                    background: #1d1d1f;
+                    border: 1px solid #2d2d31;
+                    border-radius: 24px;
+                }
+                QFrame#sidebarBrand {
+                    background: #26262a;
+                    border: 1px solid #34343a;
+                    border-radius: 22px;
+                }
+                QLabel#brandMark {
+                    min-width: 44px;
+                    max-width: 44px;
+                    min-height: 44px;
+                    max-height: 44px;
+                    border-radius: 22px;
+                    background: #ff385c;
+                    color: white;
+                    font-size: 22px;
                     font-weight: 700;
-                    text-align: left;
+                    qproperty-alignment: AlignCenter;
                 }
-                QPushButton#settingsToggleBtn:hover {
-                    background: rgba(255, 255, 255, 0.22);
-                }
-                QPushButton#versionBtn {
-                    border-radius: 10px;
-                    border: 1px solid rgba(255, 255, 255, 0.24);
-                    background: rgba(255, 255, 255, 0.10);
-                    color: #EFE6FF;
-                    font-size: 15px;
-                    font-weight: 700;
-                    padding: 7px 10px;
-                    text-align: left;
-                }
-                QPushButton#versionBtn:hover {
-                    background: rgba(255, 255, 255, 0.18);
-                }
-                QPushButton#versionBtn:disabled {
-                    color: #BFAEE6;
-                }
-                QFrame#card {
-                    border-radius: 16px;
-                    background: rgba(255, 255, 255, 0.08);
-                    border: 1px solid rgba(255, 255, 255, 0.14);
-                }
-                QLabel#titleLabel {
-                    color: #FFFFFF;
-                    font-size: 26px;
-                    font-weight: 700;
-                }
-                QLabel#subtitleLabel {
-                    color: #EFE9FF;
-                    font-size: 13px;
-                }
-                QLabel#inputHintLabel {
-                    color: #E7DAFF;
-                    font-size: 12px;
-                }
-                QLabel#sectionTitle {
-                    color: #EEE5FF;
-                    font-size: 16px;
-                    font-weight: 650;
-                }
-                QLabel#fieldLabel {
-                    color: #ECE4FF;
+                QLabel#brandName {
+                    color: #ffffff;
+                    font-size: 24px;
                     font-weight: 600;
                 }
-                QLabel#summaryLabel {
-                    color: #E9DEFF;
+                QLabel#brandSub {
+                    color: #c2b9bd;
+                    font-size: 12px;
+                }
+                QLabel#navCaption, QLabel#sideVersion {
+                    color: #a39a9e;
+                    font-size: 12px;
+                    font-weight: 600;
+                    letter-spacing: 0.5px;
+                }
+                QPushButton#navButton {
+                    border: 1px solid transparent;
+                    border-radius: 16px;
+                    background: transparent;
+                    color: #f2edf0;
+                    padding: 14px 16px;
+                    text-align: left;
+                    font-size: 15px;
+                    font-weight: 600;
+                }
+                QPushButton#navButton:hover {
+                    background: #27272b;
+                }
+                QPushButton#navButton:checked {
+                    background: #322127;
+                    color: #ff8da4;
+                    border-color: #4a3037;
+                }
+                QFrame#headerCard {
+                    border-radius: 28px;
+                    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                        stop:0 #ff385c, stop:1 #ff7f8f);
+                }
+                QLabel#pageBadge {
+                    color: #fff6f7;
+                    background: rgba(255, 255, 255, 0.16);
+                    border-radius: 12px;
+                    padding: 5px 10px;
+                    font-size: 11px;
+                    font-weight: 700;
+                }
+                QLabel#pageTitle {
+                    color: #ffffff;
+                    font-size: 28px;
+                    font-weight: 600;
+                }
+                QLabel#pageSubtitle {
+                    color: #fff2f4;
+                    font-size: 14px;
+                }
+                QStackedWidget#pageStack {
+                    background: transparent;
+                }
+                QFrame#card {
+                    background: #202022;
+                    border: 1px solid #303036;
+                    border-radius: 24px;
+                }
+                QLabel#sectionTitle {
+                    color: #ffffff;
+                    font-size: 18px;
+                    font-weight: 600;
+                }
+                QLabel#fieldLabel {
+                    color: #f3eef0;
                     font-size: 14px;
                     font-weight: 600;
                 }
+                QLabel#inputHintLabel, QLabel#hintText, QLabel#summaryLabel {
+                    color: #cbc2c6;
+                    font-size: 13px;
+                }
+                QLineEdit#pathInput, QLineEdit#urlLineInput, QTextEdit#urlInput, QSpinBox#spinBox, QComboBox#choiceSelect {
+                    background: #2a2a2e;
+                    color: #ffffff;
+                    border: 1px solid #3a3a42;
+                    border-radius: 16px;
+                    padding: 10px 14px;
+                    selection-background-color: #ff5d7d;
+                }
+                QTextEdit#urlInput {
+                    padding-top: 12px;
+                    padding-bottom: 12px;
+                }
+                QComboBox#choiceSelect::drop-down {
+                    border: 0;
+                    width: 26px;
+                }
+                QComboBox#choiceSelect QAbstractItemView {
+                    border: 1px solid #3a3a42;
+                    background: #222226;
+                    color: #ffffff;
+                    selection-background-color: #ff5d7d;
+                }
                 QTabWidget#inputTabs::pane {
-                    border: 1px solid rgba(255, 255, 255, 0.20);
-                    border-radius: 10px;
+                    border: 1px solid #34343a;
+                    border-radius: 18px;
                     top: -1px;
                 }
                 QTabWidget#inputTabs QTabBar::tab {
-                    background: rgba(255, 255, 255, 0.10);
-                    color: #EFE6FF;
-                    padding: 7px 12px;
-                    border-top-left-radius: 8px;
-                    border-top-right-radius: 8px;
-                    margin-right: 6px;
+                    background: #2a2a2e;
+                    color: #d9d0d3;
+                    border-top-left-radius: 14px;
+                    border-top-right-radius: 14px;
+                    padding: 10px 16px;
+                    margin-right: 8px;
                 }
                 QTabWidget#inputTabs QTabBar::tab:selected {
-                    background: rgba(156, 108, 255, 0.60);
+                    background: #3a272d;
+                    color: #ffffff;
                 }
                 QScrollArea#singleScroll, QWidget#singleContainer {
                     background: transparent;
                     border: 0;
                 }
-                QTextEdit#urlInput, QLineEdit#pathInput, QLineEdit#urlLineInput, QSpinBox#spinBox {
-                    border: 1px solid rgba(255, 255, 255, 0.24);
-                    border-radius: 10px;
-                    background: rgba(255, 255, 255, 0.10);
-                    color: #FFFFFF;
-                    padding: 10px;
-                    selection-background-color: #9E73FF;
-                }
-                QTextEdit#urlInput {
-                    padding-bottom: 14px;
-                }
-                QSpinBox#spinBox {
-                    min-width: 74px;
-                    padding: 8px 6px;
-                }
-                QPushButton#stepBtn {
-                    border-radius: 10px;
-                    border: 1px solid rgba(255, 255, 255, 0.30);
-                    background: rgba(255, 255, 255, 0.12);
-                    color: #FFFFFF;
-                    font-size: 18px;
-                    font-weight: 700;
-                }
-                QPushButton#stepBtn:hover {
-                    background: rgba(255, 255, 255, 0.20);
-                }
-                QPushButton#secondaryBtn {
-                    border-radius: 10px;
-                    border: 1px solid rgba(255, 255, 255, 0.24);
-                    background: rgba(255, 255, 255, 0.10);
-                    color: #F2EBFF;
-                    padding: 10px 14px;
+                QPushButton#startBtn, QPushButton#primaryBtn {
+                    background: #ff385c;
+                    color: white;
+                    border: 0;
+                    border-radius: 16px;
+                    padding: 12px 22px;
+                    font-size: 15px;
                     font-weight: 600;
                 }
-                QPushButton#secondaryBtn:hover {
-                    background: rgba(255, 255, 255, 0.18);
+                QPushButton#startBtn:hover, QPushButton#primaryBtn:hover {
+                    background: #e00b41;
+                }
+                QPushButton#startBtn:disabled, QPushButton#primaryBtn:disabled {
+                    background: #844350;
+                    color: #f7dbe1;
+                }
+                QPushButton#secondaryBtn, QPushButton#tableActionBtn {
+                    background: #2a2a2e;
+                    color: #ffffff;
+                    border: 1px solid #404048;
+                    border-radius: 16px;
+                    padding: 10px 16px;
+                    font-size: 14px;
+                    font-weight: 600;
+                }
+                QPushButton#secondaryBtn:hover, QPushButton#tableActionBtn:hover {
+                    background: #333338;
                 }
                 QPushButton#miniBtn {
-                    border-radius: 8px;
-                    border: 1px solid rgba(255, 255, 255, 0.24);
-                    background: rgba(255, 255, 255, 0.10);
-                    color: #F2EBFF;
-                    padding: 2px 10px;
+                    background: #2a2a2e;
+                    color: #f7f2f4;
+                    border: 1px solid #404048;
+                    border-radius: 12px;
+                    padding: 6px 12px;
                     font-size: 12px;
-                    font-weight: 650;
+                    font-weight: 600;
                 }
                 QPushButton#miniBtn:hover {
-                    background: rgba(255, 255, 255, 0.18);
+                    background: #333338;
                 }
-                QPushButton#themeIconBtn {
-                    border-radius: 19px;
-                    border: 1px solid rgba(255, 255, 255, 0.28);
-                    background: rgba(255, 255, 255, 0.18);
-                    color: #FFFFFF;
-                    font-size: 18px;
-                    font-weight: 700;
-                }
-                QPushButton#themeIconBtn:hover {
-                    background: rgba(255, 255, 255, 0.28);
-                }
-                QComboBox#langSelect {
-                    border-radius: 12px;
-                    border: 1px solid rgba(255, 255, 255, 0.28);
-                    background: rgba(255, 255, 255, 0.18);
-                    color: #FFFFFF;
-                    padding: 0 30px 0 12px;
+                QPushButton#dangerBtn, QPushButton#rowDeleteBtn {
+                    background: #3a2428;
+                    color: #ffb8c5;
+                    border: 1px solid #5a343d;
+                    border-radius: 14px;
+                    padding: 8px 14px;
                     font-size: 13px;
-                    font-weight: 650;
+                    font-weight: 600;
                 }
-                QComboBox#langSelect:hover {
-                    background: rgba(255, 255, 255, 0.28);
+                QPushButton#dangerBtn:hover, QPushButton#rowDeleteBtn:hover {
+                    background: #4a2a31;
                 }
-                QComboBox#langSelect::drop-down {
-                    border: 0;
-                    width: 24px;
-                }
-                QComboBox#langSelect::down-arrow {
-                    image: none;
-                    width: 0;
-                    height: 0;
-                }
-                QComboBox#langSelect QAbstractItemView {
-                    border: 1px solid rgba(255, 255, 255, 0.20);
-                    background: #3C286D;
-                    color: #FFFFFF;
-                    selection-background-color: #8A5BFF;
-                    selection-color: #FFFFFF;
-                    outline: 0;
-                }
-                QPushButton#startBtn {
-                    border-radius: 12px;
-                    border: 0;
-                    background: #9C6BFF;
-                    color: #FFFFFF;
-                    padding: 12px 26px;
-                    font-size: 16px;
-                    font-weight: 700;
-                }
-                QPushButton#startBtn:hover {
-                    background: #AE85FF;
-                }
-                QPushButton#startBtn:disabled {
-                    background: #7059A6;
-                    color: #D9CFFF;
-                }
-                QPushButton#tableActionBtn {
+                QPushButton#rowPauseBtn, QPushButton#rowPlayBtn {
+                    background: #2a2a2e;
+                    color: #ffffff;
+                    border: 1px solid #404048;
                     border-radius: 10px;
-                    border: 1px solid rgba(255, 255, 255, 0.26);
-                    background: rgba(255, 255, 255, 0.14);
-                    color: #F2EBFF;
-                    padding: 8px 12px;
-                    font-weight: 700;
-                }
-                QPushButton#tableActionBtn:hover {
-                    background: rgba(255, 255, 255, 0.22);
-                }
-                QPushButton#tableActionBtn:disabled {
-                    background: rgba(255, 255, 255, 0.10);
-                    color: #B8A7DF;
-                }
-                QPushButton#dangerBtn {
-                    border-radius: 10px;
-                    border: 1px solid rgba(255, 132, 145, 0.68);
-                    background: rgba(255, 104, 124, 0.24);
-                    color: #FFD9DF;
-                    padding: 8px 12px;
-                    font-weight: 700;
-                }
-                QPushButton#dangerBtn:hover {
-                    background: rgba(255, 104, 124, 0.34);
-                }
-                QPushButton#rowPauseBtn {
-                    border-radius: 8px;
-                    border: 1px solid rgba(255, 255, 255, 0.24);
-                    background: rgba(255, 255, 255, 0.12);
-                    color: #FFFFFF;
-                    padding: 2px 8px;
+                    padding: 4px 10px;
                     font-size: 11px;
-                    font-weight: 650;
+                    font-weight: 600;
                 }
-                QPushButton#rowPauseBtn:hover {
-                    background: rgba(255, 255, 255, 0.20);
-                }
-                QPushButton#rowPlayBtn {
-                    border-radius: 8px;
-                    border: 1px solid rgba(134, 227, 168, 0.34);
-                    background: rgba(134, 227, 168, 0.14);
-                    color: #CFF9DD;
-                    padding: 2px 8px;
-                    font-size: 11px;
-                    font-weight: 650;
-                }
-                QPushButton#rowPlayBtn:hover {
-                    background: rgba(134, 227, 168, 0.22);
-                }
-                QPushButton#rowDeleteBtn {
-                    border-radius: 8px;
-                    border: 1px solid rgba(255, 132, 145, 0.68);
-                    background: rgba(255, 104, 124, 0.22);
-                    color: #FFD9DF;
-                    padding: 2px 8px;
-                    font-size: 11px;
-                    font-weight: 650;
-                }
-                QPushButton#rowDeleteBtn:hover {
-                    background: rgba(255, 104, 124, 0.34);
+                QPushButton#rowPauseBtn:hover, QPushButton#rowPlayBtn:hover {
+                    background: #35353a;
                 }
                 QTableWidget {
-                    border: 1px solid rgba(255, 255, 255, 0.20);
-                    border-radius: 12px;
-                    background: rgba(255, 255, 255, 0.08);
-                    color: #FFFFFF;
-                    gridline-color: rgba(255, 255, 255, 0.14);
-                    alternate-background-color: rgba(255, 255, 255, 0.06);
+                    background: #1d1d20;
+                    color: #ffffff;
+                    border: 1px solid #303036;
+                    border-radius: 18px;
+                    gridline-color: #2a2a2f;
+                    alternate-background-color: #232327;
                 }
                 QHeaderView::section {
-                    background: rgba(255, 255, 255, 0.16);
-                    color: #F1E8FF;
+                    background: #2a2a2e;
+                    color: #ffffff;
                     border: 0;
-                    padding: 8px;
-                    font-weight: 700;
+                    padding: 10px 8px;
+                    font-weight: 600;
                 }
                 QProgressBar {
-                    border: 1px solid rgba(255, 255, 255, 0.24);
-                    border-radius: 5px;
-                    background: rgba(255, 255, 255, 0.07);
+                    background: #2a2a2e;
+                    color: #ffffff;
+                    border: 1px solid #3a3a42;
+                    border-radius: 8px;
                     text-align: center;
-                    color: #FFFFFF;
-                    min-width: 200px;
-                    min-height: 12px;
+                    min-height: 14px;
                 }
                 QProgressBar::chunk {
-                    border-radius: 4px;
                     background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                        stop:0 #8E5BFF, stop:1 #C37BFF);
+                        stop:0 #ff385c, stop:1 #ff9aaa);
+                    border-radius: 7px;
                 }
             """
-            self.theme_btn.setText("☾")
         else:
             stylesheet = """
                 #root {
-                    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                        stop:0 #FDFDFF, stop:1 #EEF1F8);
+                    background: #fbfbfb;
                 }
-                QFrame#headerCard {
-                    border-radius: 18px;
-                    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                        stop:0 #8D5BFF, stop:1 #B286FF);
+                QMenuBar {
+                    background: #ffffff;
+                    color: #222222;
+                    border-bottom: 1px solid #ebebeb;
                 }
-                QFrame#settingsPanel {
-                    border-radius: 16px;
-                    background: #FFFFFF;
-                    border: 1px solid #DDE1EB;
+                QMenuBar::item:selected {
+                    background: #f7f7f7;
                 }
-                QPushButton#settingsToggleBtn {
-                    border-radius: 11px;
-                    border: 1px solid #CFD5E3;
-                    background: #F8F9FC;
-                    color: #253148;
-                    padding: 8px 12px;
-                    font-size: 16px;
+                QMenu {
+                    background: #ffffff;
+                    color: #222222;
+                    border: 1px solid #ebebeb;
+                }
+                QMenu::item:selected {
+                    background: #fff1f4;
+                }
+                QFrame#sidebar {
+                    background: #ffffff;
+                    border: 1px solid #ebebeb;
+                    border-radius: 24px;
+                }
+                QFrame#sidebarBrand {
+                    background: #fff7f8;
+                    border: 1px solid #ffe1e7;
+                    border-radius: 22px;
+                }
+                QLabel#brandMark {
+                    min-width: 44px;
+                    max-width: 44px;
+                    min-height: 44px;
+                    max-height: 44px;
+                    border-radius: 22px;
+                    background: #ff385c;
+                    color: white;
+                    font-size: 22px;
                     font-weight: 700;
-                    text-align: left;
+                    qproperty-alignment: AlignCenter;
                 }
-                QPushButton#settingsToggleBtn:hover {
-                    background: #EEF2FA;
+                QLabel#brandName {
+                    color: #222222;
+                    font-size: 24px;
+                    font-weight: 600;
                 }
-                QPushButton#versionBtn {
-                    border-radius: 10px;
-                    border: 1px solid #CFD5E3;
-                    background: #F8F9FC;
-                    color: #2A3346;
-                    font-size: 15px;
-                    font-weight: 700;
-                    padding: 7px 10px;
-                    text-align: left;
+                QLabel#brandSub {
+                    color: #6a6a6a;
+                    font-size: 12px;
                 }
-                QPushButton#versionBtn:hover {
-                    background: #EEF2FA;
-                }
-                QPushButton#versionBtn:disabled {
-                    color: #8C99B1;
-                }
-                QFrame#card {
-                    border-radius: 16px;
-                    background: #FFFFFF;
-                    border: 1px solid #DDE1EB;
-                }
-                QLabel#titleLabel {
-                    color: #FFFFFF;
-                    font-size: 26px;
-                    font-weight: 700;
-                }
-                QLabel#subtitleLabel {
-                    color: #F4EDFF;
-                    font-size: 13px;
-                }
-                QLabel#inputHintLabel {
-                    color: #30384A;
+                QLabel#navCaption, QLabel#sideVersion {
+                    color: #929292;
                     font-size: 12px;
                     font-weight: 600;
+                    letter-spacing: 0.5px;
                 }
-                QLabel#sectionTitle {
-                    color: #1F2430;
-                    font-size: 16px;
-                    font-weight: 650;
-                }
-                QLabel#fieldLabel {
-                    color: #242A36;
+                QPushButton#navButton {
+                    border: 1px solid transparent;
+                    border-radius: 16px;
+                    background: transparent;
+                    color: #3f3f3f;
+                    padding: 14px 16px;
+                    text-align: left;
+                    font-size: 15px;
                     font-weight: 600;
                 }
-                QLabel#summaryLabel {
-                    color: #2B3242;
+                QPushButton#navButton:hover {
+                    background: #f7f7f7;
+                }
+                QPushButton#navButton:checked {
+                    background: #fff1f4;
+                    color: #ff385c;
+                    border-color: #ffd6de;
+                }
+                QFrame#headerCard {
+                    border-radius: 28px;
+                    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                        stop:0 #ff385c, stop:1 #ff7f8f);
+                }
+                QLabel#pageBadge {
+                    color: #fff9fa;
+                    background: rgba(255, 255, 255, 0.22);
+                    border-radius: 12px;
+                    padding: 5px 10px;
+                    font-size: 11px;
+                    font-weight: 700;
+                }
+                QLabel#pageTitle {
+                    color: #ffffff;
+                    font-size: 28px;
+                    font-weight: 600;
+                }
+                QLabel#pageSubtitle {
+                    color: #fff5f6;
+                    font-size: 14px;
+                }
+                QStackedWidget#pageStack {
+                    background: transparent;
+                }
+                QFrame#card {
+                    background: #ffffff;
+                    border: 1px solid #ebebeb;
+                    border-radius: 24px;
+                }
+                QLabel#sectionTitle {
+                    color: #222222;
+                    font-size: 18px;
+                    font-weight: 600;
+                }
+                QLabel#fieldLabel {
+                    color: #222222;
                     font-size: 14px;
                     font-weight: 600;
                 }
+                QLabel#inputHintLabel, QLabel#hintText, QLabel#summaryLabel {
+                    color: #6a6a6a;
+                    font-size: 13px;
+                }
+                QLineEdit#pathInput, QLineEdit#urlLineInput, QTextEdit#urlInput, QSpinBox#spinBox, QComboBox#choiceSelect {
+                    background: #ffffff;
+                    color: #222222;
+                    border: 1px solid #dddddd;
+                    border-radius: 16px;
+                    padding: 10px 14px;
+                    selection-background-color: #ff5d7d;
+                }
+                QTextEdit#urlInput {
+                    padding-top: 12px;
+                    padding-bottom: 12px;
+                }
+                QComboBox#choiceSelect::drop-down {
+                    border: 0;
+                    width: 26px;
+                }
+                QComboBox#choiceSelect QAbstractItemView {
+                    border: 1px solid #dddddd;
+                    background: #ffffff;
+                    color: #222222;
+                    selection-background-color: #ff5d7d;
+                    selection-color: #ffffff;
+                }
                 QTabWidget#inputTabs::pane {
-                    border: 1px solid #D9DFEC;
-                    border-radius: 10px;
+                    border: 1px solid #ebebeb;
+                    border-radius: 18px;
                     top: -1px;
                 }
                 QTabWidget#inputTabs QTabBar::tab {
-                    background: #F3F6FC;
-                    color: #2A3346;
-                    padding: 7px 12px;
-                    border-top-left-radius: 8px;
-                    border-top-right-radius: 8px;
-                    margin-right: 6px;
+                    background: #f7f7f7;
+                    color: #6a6a6a;
+                    border-top-left-radius: 14px;
+                    border-top-right-radius: 14px;
+                    padding: 10px 16px;
+                    margin-right: 8px;
                 }
                 QTabWidget#inputTabs QTabBar::tab:selected {
-                    background: #E5ECFA;
+                    background: #fff1f4;
+                    color: #222222;
                 }
                 QScrollArea#singleScroll, QWidget#singleContainer {
                     background: transparent;
                     border: 0;
                 }
-                QTextEdit#urlInput, QLineEdit#pathInput, QLineEdit#urlLineInput, QSpinBox#spinBox {
-                    border: 1px solid #C7B8F2;
-                    border-radius: 10px;
-                    background: #F2ECFF;
-                    color: #251F34;
-                    padding: 10px;
-                    selection-background-color: #A77BFF;
-                }
-                QTextEdit#urlInput {
-                    padding-bottom: 14px;
-                }
-                QSpinBox#spinBox {
-                    min-width: 74px;
-                    padding: 8px 6px;
-                }
-                QPushButton#stepBtn {
-                    border-radius: 10px;
-                    border: 1px solid #C7D0E2;
-                    background: #EEF2FA;
-                    color: #243046;
-                    font-size: 18px;
-                    font-weight: 700;
-                }
-                QPushButton#stepBtn:hover {
-                    background: #E1E8F6;
-                }
-                QPushButton#secondaryBtn {
-                    border-radius: 10px;
-                    border: 1px solid #CFD5E3;
-                    background: #F8F9FC;
-                    color: #1E2532;
-                    padding: 10px 14px;
+                QPushButton#startBtn, QPushButton#primaryBtn {
+                    background: #ff385c;
+                    color: white;
+                    border: 0;
+                    border-radius: 16px;
+                    padding: 12px 22px;
+                    font-size: 15px;
                     font-weight: 600;
                 }
-                QPushButton#secondaryBtn:hover {
-                    background: #EEF2FA;
+                QPushButton#startBtn:hover, QPushButton#primaryBtn:hover {
+                    background: #e00b41;
+                }
+                QPushButton#startBtn:disabled, QPushButton#primaryBtn:disabled {
+                    background: #ffd1da;
+                    color: #ffffff;
+                }
+                QPushButton#secondaryBtn, QPushButton#tableActionBtn {
+                    background: #ffffff;
+                    color: #222222;
+                    border: 1px solid #dddddd;
+                    border-radius: 16px;
+                    padding: 10px 16px;
+                    font-size: 14px;
+                    font-weight: 600;
+                }
+                QPushButton#secondaryBtn:hover, QPushButton#tableActionBtn:hover {
+                    background: #f7f7f7;
                 }
                 QPushButton#miniBtn {
-                    border-radius: 8px;
-                    border: 1px solid #CFD5E3;
-                    background: #F8F9FC;
-                    color: #1E2532;
-                    padding: 2px 10px;
+                    background: #ffffff;
+                    color: #222222;
+                    border: 1px solid #dddddd;
+                    border-radius: 12px;
+                    padding: 6px 12px;
                     font-size: 12px;
-                    font-weight: 650;
+                    font-weight: 600;
                 }
                 QPushButton#miniBtn:hover {
-                    background: #EEF2FA;
+                    background: #f7f7f7;
                 }
-                QPushButton#themeIconBtn {
-                    border-radius: 19px;
-                    border: 1px solid #C7D0E2;
-                    background: #FFFFFF;
-                    color: #283347;
-                    font-size: 18px;
-                    font-weight: 700;
-                }
-                QPushButton#themeIconBtn:hover {
-                    background: #F3F6FC;
-                }
-                QComboBox#langSelect {
-                    border-radius: 12px;
-                    border: 1px solid #C7D0E2;
-                    background: #FFFFFF;
-                    color: #283347;
-                    padding: 0 30px 0 12px;
+                QPushButton#dangerBtn, QPushButton#rowDeleteBtn {
+                    background: #fff1f4;
+                    color: #c13515;
+                    border: 1px solid #ffd6de;
+                    border-radius: 14px;
+                    padding: 8px 14px;
                     font-size: 13px;
-                    font-weight: 650;
+                    font-weight: 600;
                 }
-                QComboBox#langSelect:hover {
-                    background: #F3F6FC;
+                QPushButton#dangerBtn:hover, QPushButton#rowDeleteBtn:hover {
+                    background: #ffe6eb;
                 }
-                QComboBox#langSelect::drop-down {
-                    border: 0;
-                    width: 24px;
-                }
-                QComboBox#langSelect::down-arrow {
-                    image: none;
-                    width: 0;
-                    height: 0;
-                }
-                QComboBox#langSelect QAbstractItemView {
-                    border: 1px solid #C7D0E2;
-                    background: #FFFFFF;
-                    color: #283347;
-                    selection-background-color: #8A5BFF;
-                    selection-color: #FFFFFF;
-                    outline: 0;
-                }
-                QPushButton#startBtn {
-                    border-radius: 12px;
-                    border: 0;
-                    background: #8A5BFF;
-                    color: #FFFFFF;
-                    padding: 12px 26px;
-                    font-size: 16px;
-                    font-weight: 700;
-                }
-                QPushButton#startBtn:hover {
-                    background: #9C71FF;
-                }
-                QPushButton#startBtn:disabled {
-                    background: #AD9BD8;
-                    color: #F4EEFF;
-                }
-                QPushButton#tableActionBtn {
+                QPushButton#rowPauseBtn, QPushButton#rowPlayBtn {
+                    background: #ffffff;
+                    color: #222222;
+                    border: 1px solid #dddddd;
                     border-radius: 10px;
-                    border: 1px solid #CAD2E5;
-                    background: #F2F5FB;
-                    color: #263247;
-                    padding: 8px 12px;
-                    font-weight: 700;
-                }
-                QPushButton#tableActionBtn:hover {
-                    background: #E8EEF8;
-                }
-                QPushButton#tableActionBtn:disabled {
-                    background: #F7F9FD;
-                    color: #96A2BA;
-                }
-                QPushButton#dangerBtn {
-                    border-radius: 10px;
-                    border: 1px solid #F1A6B2;
-                    background: #FFE7EB;
-                    color: #A12C44;
-                    padding: 8px 12px;
-                    font-weight: 700;
-                }
-                QPushButton#dangerBtn:hover {
-                    background: #FFDCE3;
-                }
-                QPushButton#rowPauseBtn {
-                    border-radius: 8px;
-                    border: 1px solid #CAD2E5;
-                    background: #F2F5FB;
-                    color: #243146;
-                    padding: 2px 8px;
+                    padding: 4px 10px;
                     font-size: 11px;
-                    font-weight: 650;
+                    font-weight: 600;
                 }
-                QPushButton#rowPauseBtn:hover {
-                    background: #E8EEF8;
-                }
-                QPushButton#rowPlayBtn {
-                    border-radius: 8px;
-                    border: 1px solid #BFE6CA;
-                    background: #ECFBF1;
-                    color: #1F8F4D;
-                    padding: 2px 8px;
-                    font-size: 11px;
-                    font-weight: 650;
-                }
-                QPushButton#rowPlayBtn:hover {
-                    background: #DDF7E7;
-                }
-                QPushButton#rowDeleteBtn {
-                    border-radius: 8px;
-                    border: 1px solid #F1A6B2;
-                    background: #FFE7EB;
-                    color: #A12C44;
-                    padding: 2px 8px;
-                    font-size: 11px;
-                    font-weight: 650;
-                }
-                QPushButton#rowDeleteBtn:hover {
-                    background: #FFDCE3;
+                QPushButton#rowPauseBtn:hover, QPushButton#rowPlayBtn:hover {
+                    background: #f7f7f7;
                 }
                 QTableWidget {
-                    border: 1px solid #D9DFEC;
-                    border-radius: 12px;
-                    background: #FFFFFF;
-                    color: #1F2430;
-                    gridline-color: #E3E8F4;
-                    alternate-background-color: #F8FAFF;
+                    background: #ffffff;
+                    color: #222222;
+                    border: 1px solid #ebebeb;
+                    border-radius: 18px;
+                    gridline-color: #f0f0f0;
+                    alternate-background-color: #fcfcfc;
                 }
                 QHeaderView::section {
-                    background: #EFF3FA;
-                    color: #2A3343;
+                    background: #f7f7f7;
+                    color: #222222;
                     border: 0;
-                    padding: 8px;
-                    font-weight: 700;
+                    padding: 10px 8px;
+                    font-weight: 600;
                 }
                 QProgressBar {
-                    border: 1px solid #CBD4E6;
-                    border-radius: 5px;
-                    background: #F7F9FD;
+                    background: #f7f7f7;
+                    color: #222222;
+                    border: 1px solid #ebebeb;
+                    border-radius: 8px;
                     text-align: center;
-                    color: #1F2430;
-                    min-width: 200px;
-                    min-height: 12px;
+                    min-height: 14px;
                 }
                 QProgressBar::chunk {
-                    border-radius: 4px;
                     background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                        stop:0 #8A5BFF, stop:1 #B27BFF);
+                        stop:0 #ff385c, stop:1 #ff9aaa);
+                    border-radius: 7px;
                 }
             """
-            self.theme_btn.setText("☼")
 
         self.setStyleSheet(stylesheet)
+        self._refresh_theme_options()
         self._update_version_btn_text()
 
     def _toggle_theme(self) -> None:
-        self.current_theme = "light" if self.current_theme == "purple" else "purple"
+        self.current_theme = "dark" if self.current_theme == "light" else "light"
         self._apply_theme(self.current_theme)
         self._animate_theme_switch()
 
@@ -3106,6 +3405,115 @@ class MainWindow(QMainWindow):
         )
         if folder:
             self.output_dir_input.setText(folder)
+
+    def _choose_repair_file(self) -> bool:
+        start_dir = self.output_dir_input.text().strip() or str(default_download_dir())
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            self.t("dlg_select_repair_file"),
+            start_dir,
+            self.t("repair_filter"),
+        )
+        if not file_path:
+            return False
+        self.repair_path_input.setText(file_path)
+        self.repair_status_label.setText(self.t("repair_idle"))
+        self.repair_open_btn.setEnabled(False)
+        self.repair_output_path = None
+        self._set_active_page("repair")
+        return True
+
+    def _run_repair_from_page(self) -> None:
+        source_text = self.repair_path_input.text().strip()
+        if not source_text:
+            QMessageBox.warning(self, self.t("tip"), self.t("tip_repair_missing"))
+            return
+
+        source = Path(source_text).expanduser().resolve()
+        if not source.exists():
+            QMessageBox.warning(self, self.t("tip"), self.t("tip_repair_missing"))
+            return
+
+        try:
+            options = self._build_default_options()
+        except Exception as exc:
+            title = self.t("ffmpeg_missing") if isinstance(exc, FileNotFoundError) else self.t("tip")
+            QMessageBox.critical(self, title, str(exc))
+            return
+
+        self.repair_status_label.setText(self.t("detail_validating"))
+        self.repair_open_btn.setEnabled(False)
+        self.repair_output_path = None
+
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            result = repair_media_file(source, options)
+        finally:
+            QApplication.restoreOverrideCursor()
+
+        if result.status == "noop":
+            self.repair_status_label.setText(self.t("repair_result_healthy"))
+            QMessageBox.information(self, self.t("tip"), self.t("repair_result_healthy"))
+            return
+
+        if result.status == "ok" and result.output_path:
+            self.repair_output_path = result.output_path
+            self.repair_open_btn.setEnabled(True)
+            if result.method == "transcode":
+                message = self.t("repair_result_transcode", file=str(result.output_path))
+            else:
+                message = self.t("repair_result_remux", file=str(result.output_path))
+            self.repair_status_label.setText(message)
+            QMessageBox.information(self, self.t("tip"), message)
+            return
+
+        detail = result.detail or self.t("repair_result_failed")
+        self.repair_status_label.setText(self.t("repair_result_failed_detail", detail=detail))
+        QMessageBox.warning(
+            self,
+            self.t("tip"),
+            self.t("repair_result_failed_detail", detail=detail),
+        )
+
+    def _open_repaired_output(self) -> None:
+        if not self.repair_output_path:
+            QMessageBox.warning(self, self.t("tip"), self.t("tip_file_missing"))
+            return
+        self._open_path(self.repair_output_path, "tip_file_missing")
+
+    def _repair_video_from_menu(self) -> None:
+        self._set_active_page("repair")
+        if self._choose_repair_file():
+            self._run_repair_from_page()
+
+    def _attempt_stop_worker_for_exit(self) -> bool:
+        if not self.worker or not self.worker_thread or not self.worker_thread.isRunning():
+            return True
+
+        ret = QMessageBox.question(
+            self,
+            self.t("dlg_confirm_exit"),
+            self.t("dlg_confirm_exit_running"),
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if ret != QMessageBox.Yes:
+            return False
+
+        self.summary_label.setText(self.t("summary_exit_stopping"))
+        self.worker.apply_command("delete_all")
+
+        app = QApplication.instance()
+        deadline = time.monotonic() + 8.0
+        while self.worker_thread and self.worker_thread.isRunning() and time.monotonic() < deadline:
+            if app is not None:
+                app.processEvents()
+            time.sleep(0.05)
+
+        if self.worker_thread and self.worker_thread.isRunning():
+            QMessageBox.warning(self, self.t("tip"), self.t("tip_exit_wait_stop"))
+            return False
+        return True
 
     def _add_table_row(self, task: DownloadTask) -> None:
         row = self.table.rowCount()
@@ -3684,6 +4092,10 @@ class MainWindow(QMainWindow):
         self.worker_thread = None
 
     def closeEvent(self, event: object) -> None:
+        ignore = getattr(event, "ignore", None)
+        if callable(ignore) and not self._attempt_stop_worker_for_exit():
+            ignore()
+            return
         if self.local_api_server:
             self.local_api_server.stop()
         super().closeEvent(event)

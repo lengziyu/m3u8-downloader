@@ -42,7 +42,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: windows-installer
-          path: dist/M3U8-Downloader-Setup.exe
+          path: dist/Taoying-Setup.exe
           if-no-files-found: ignore
 
       - name: Upload Windows Portable Artifact
@@ -50,7 +50,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: windows-portable
-          path: dist/M3U8-Downloader.exe
+          path: dist/Taoying.exe
           if-no-files-found: ignore
 
       - name: Upload Windows Build Log
@@ -94,8 +94,8 @@ jobs:
         with:
           name: macos-installers
           path: |
-            dist/M3U8-Downloader-Installer.pkg
-            dist/M3U8-Downloader-Installer.dmg
+            dist/Taoying-Installer.pkg
+            dist/Taoying-Installer.dmg
           if-no-files-found: ignore
 
       - name: Upload macOS Build Log
@@ -161,9 +161,9 @@ jobs:
         with:
           fail_on_unmatched_files: false
           files: |
-            release-assets/windows-installer/M3U8-Downloader-Setup.exe
-            release-assets/windows-portable/M3U8-Downloader.exe
+            release-assets/windows-installer/Taoying-Setup.exe
+            release-assets/windows-portable/Taoying.exe
             release-assets/windows-build-log/windows-build.log
-            release-assets/macos-installers/M3U8-Downloader-Installer.pkg
-            release-assets/macos-installers/M3U8-Downloader-Installer.dmg
+            release-assets/macos-installers/Taoying-Installer.pkg
+            release-assets/macos-installers/Taoying-Installer.dmg
             release-assets/macos-build-log/macos-build.log

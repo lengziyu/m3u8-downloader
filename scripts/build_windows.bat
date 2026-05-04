@@ -10,5 +10,5 @@ if errorlevel 1 (
   exit /b 1
 )
 echo.
-echo Build succeeded. Output: dist\M3U8-Downloader.exe
+echo Build succeeded. Output: dist\Taoying.exe
 pause
