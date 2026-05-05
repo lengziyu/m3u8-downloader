@@ -112,8 +112,8 @@ Name: "desktopicon"; Description: "Create a desktop icon"; GroupDescription: "Ad
 Source: "{app_exe}"; DestDir: "{{app}}"; Flags: ignoreversion
 
 [Icons]
-Name: "{{autoprograms}}\\{APP_DISPLAY_NAME}"; Filename: "{{app}}\\{APP_NAME}.exe"
-Name: "{{autodesktop}}\\{APP_DISPLAY_NAME}"; Filename: "{{app}}\\{APP_NAME}.exe"; Tasks: desktopicon
+Name: "{{autoprograms}}\\{APP_DISPLAY_NAME}"; Filename: "{{app}}\\{APP_NAME}.exe"; IconFilename: "{{app}}\\{APP_NAME}.exe"; IconIndex: 0
+Name: "{{autodesktop}}\\{APP_DISPLAY_NAME}"; Filename: "{{app}}\\{APP_NAME}.exe"; IconFilename: "{{app}}\\{APP_NAME}.exe"; IconIndex: 0; Tasks: desktopicon
 
 [Run]
 Filename: "{{app}}\\{APP_NAME}.exe"; Description: "Launch {APP_DISPLAY_NAME}"; Flags: nowait postinstall skipifsilent

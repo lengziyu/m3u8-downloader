@@ -1131,6 +1131,32 @@ def run_ffmpeg_command(cmd: list[str]) -> tuple[bool, str]:
     return False, summarize_process_error(proc) or "ffmpeg execution failed"
 
 
+def normalize_repair_error_detail(detail: str | None) -> str:
+    if not detail:
+        return "ffmpeg 无法读取这个视频文件，可能文件已损坏或格式并非有效 MP4。"
+    lowered_detail = detail.lower()
+    if "error opening input" in lowered_detail or "invalid data found when processing input" in lowered_detail:
+        return "ffmpeg 无法读取该视频文件，文件可能已经严重损坏，当前无法自动修复。"
+
+    raw_parts = [part.strip(" ;|{}") for part in detail.split(";")]
+    parts: list[str] = []
+    seen: set[str] = set()
+    for part in raw_parts:
+        if not part or part in {"|", "{ | }"}:
+            continue
+        lowered = part.lower()
+        if lowered == "ffmpeg execution failed":
+            part = "ffmpeg 无法读取该视频流"
+            lowered = part.lower()
+        if lowered not in seen:
+            seen.add(lowered)
+            parts.append(part)
+
+    if not parts:
+        return "ffmpeg 无法读取这个视频文件，可能文件已损坏或格式并非有效 MP4。"
+    return "；".join(parts[:3])
+
+
 def build_sidecar_output_path(path: Path, tag: str) -> Path:
     stem = path.stem or "video"
     suffix = path.suffix or ".mp4"
@@ -1399,12 +1425,24 @@ def repair_media_file(source_path: Path, options: DownloadOptions) -> MediaRepai
 
     cleanup_file(working_output)
 
+    repair_input_args = [
+        "-analyzeduration",
+        "200M",
+        "-probesize",
+        "200M",
+        "-fflags",
+        "+genpts+igndts+discardcorrupt",
+        "-err_detect",
+        "ignore_err",
+    ]
+
     remux_cmd = [
         options.ffmpeg,
         "-hide_banner",
         "-loglevel",
         "error",
         "-y",
+        *repair_input_args,
         "-i",
         str(source),
         "-map",
@@ -1429,6 +1467,7 @@ def repair_media_file(source_path: Path, options: DownloadOptions) -> MediaRepai
         "-loglevel",
         "error",
         "-y",
+        *repair_input_args,
         "-i",
         str(source),
         "-map",
@@ -1459,9 +1498,9 @@ def repair_media_file(source_path: Path, options: DownloadOptions) -> MediaRepai
         err2 = repaired_reason2 or "invalid transcoded output"
 
     cleanup_file(working_output)
-    detail = "; ".join(
+    detail = normalize_repair_error_detail("; ".join(
         part for part in [media_reason, err or "remux failed", err2 or "transcode failed"] if part
-    )
+    ))
     return MediaRepairResult(status="failed", detail=detail)
 
 
@@ -2436,15 +2475,12 @@ class MainWindow(QMainWindow):
         self.input_tabs = QTabWidget()
         self.input_tabs.setObjectName("inputTabs")
         self.input_tabs.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        self.input_tabs.currentChanged.connect(self._refresh_input_tabs_height)
 
         single_tab = QWidget()
         single_layout = QVBoxLayout(single_tab)
         single_layout.setContentsMargins(6, 8, 6, 6)
         single_layout.setSpacing(8)
-
-        self.single_hint_label = QLabel("")
-        self.single_hint_label.setObjectName("inputHintLabel")
-        single_layout.addWidget(self.single_hint_label)
 
         self.single_scroll = QScrollArea()
         self.single_scroll.setObjectName("singleScroll")
@@ -2464,7 +2500,7 @@ class MainWindow(QMainWindow):
         self._refresh_single_input_scroll_height()
 
         self.single_scroll.setWidget(self.single_container)
-        single_layout.addWidget(self.single_scroll, 1)
+        single_layout.addWidget(self.single_scroll, 0)
 
         batch_tab = QWidget()
         batch_layout = QVBoxLayout(batch_tab)
@@ -2493,6 +2529,7 @@ class MainWindow(QMainWindow):
         self.input_tabs.addTab(batch_tab, "")
         input_layout.addWidget(self.input_title_label)
         input_layout.addWidget(self.input_tabs)
+        self._refresh_input_tabs_height()
         download_layout.addWidget(input_card)
 
         action_row = QHBoxLayout()
@@ -2864,6 +2901,7 @@ class MainWindow(QMainWindow):
             "settings": ("page_settings_title", "page_settings_sub"),
         }
         title_key, sub_key = page_meta.get(self.active_page, page_meta["download"])
+        self.header_card.setVisible(self.active_page != "download")
         self.page_badge_label.setText(self.t("page_badge"))
         self.page_title_label.setText(self.t(title_key))
         self.page_subtitle_label.setText(self.t(sub_key))
@@ -2878,7 +2916,6 @@ class MainWindow(QMainWindow):
         self._refresh_nav_button_icons()
 
         self.input_title_label.setText(self.t("input_title"))
-        self.single_hint_label.setText(self.t("single_hint"))
         self.batch_hint_label.setText(self.t("batch_hint"))
         self.batch_clear_btn.setText(self.t("batch_clear"))
         self.start_btn.setText(self.t("start"))
@@ -3929,6 +3966,18 @@ class MainWindow(QMainWindow):
         self.single_scroll.setVerticalScrollBarPolicy(
             Qt.ScrollBarAsNeeded if len(self.single_url_inputs) > 3 else Qt.ScrollBarAlwaysOff
         )
+        self._refresh_input_tabs_height()
+
+    def _refresh_input_tabs_height(self) -> None:
+        if not hasattr(self, "input_tabs"):
+            return
+        if self.input_tabs.currentIndex() == 0:
+            content_height = self.single_scroll.maximumHeight()
+            target_height = content_height + 28
+        else:
+            target_height = 184
+        self.input_tabs.setMinimumHeight(target_height)
+        self.input_tabs.setMaximumHeight(target_height)
 
     def _remove_single_input_row(self, line: QLineEdit) -> None:
         if line in self.single_url_inputs:
