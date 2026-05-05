@@ -284,6 +284,17 @@ I18N = {
         "repair_idle": "选择一个或多个 mp4 文件后点击开始修复，修复结果会另存，不覆盖原文件。",
         "repair_placeholder": "K:/video/example.mp4\nK:/video/broken.mp4",
         "repair_processing": "正在修复（{current}/{total}）：{file}",
+        "repair_progress": "进度：{current}/{total}",
+        "repair_running": "修复中...",
+        "repair_stage_scan": "正在探测可恢复流（{current}/{total}）：{file}",
+        "repair_stage_remux": "正在尝试封装修复（{current}/{total}）：{file}",
+        "repair_stage_verify": "正在校验修复结果（{current}/{total}）：{file}",
+        "repair_stage_transcode": "正在尝试转码抢救（{current}/{total}）：{file}",
+        "repair_stage_ts_probe": "正在按 TS 残片分析（{current}/{total}）：{file}",
+        "repair_stage_ts_remux": "正在按 TS 残片封装修复（{current}/{total}）：{file}",
+        "repair_stage_ts_transcode": "正在按 TS 残片转码抢救（{current}/{total}）：{file}",
+        "repair_stage_missing": "源文件不存在（{current}/{total}）：{file}",
+        "copy_detail": "复制详情",
         "settings_lang": "界面语言",
         "settings_theme": "界面主题",
         "settings_download": "下载调优",
@@ -428,6 +439,17 @@ I18N = {
         "repair_idle": "Choose one or more mp4 files and start repair. Results are saved as new files.",
         "repair_placeholder": "C:/video/example.mp4\nD:/video/broken.mp4",
         "repair_processing": "Repairing ({current}/{total}): {file}",
+        "repair_progress": "Progress: {current}/{total}",
+        "repair_running": "Repairing...",
+        "repair_stage_scan": "Scanning recoverable streams ({current}/{total}): {file}",
+        "repair_stage_remux": "Trying container repair ({current}/{total}): {file}",
+        "repair_stage_verify": "Verifying repaired output ({current}/{total}): {file}",
+        "repair_stage_transcode": "Trying transcode recovery ({current}/{total}): {file}",
+        "repair_stage_ts_probe": "Analyzing as TS fragment ({current}/{total}): {file}",
+        "repair_stage_ts_remux": "Trying TS container repair ({current}/{total}): {file}",
+        "repair_stage_ts_transcode": "Trying TS transcode recovery ({current}/{total}): {file}",
+        "repair_stage_missing": "Source file is missing ({current}/{total}): {file}",
+        "copy_detail": "Copy Details",
         "settings_lang": "Language",
         "settings_theme": "Theme",
         "settings_download": "Download Tuning",
@@ -572,6 +594,17 @@ I18N = {
         "repair_idle": "1 つ以上の mp4 ファイルを選択してから修復を開始してください。結果は別名で保存されます。",
         "repair_placeholder": "C:/video/example.mp4\nD:/video/broken.mp4",
         "repair_processing": "修復中 ({current}/{total}): {file}",
+        "repair_progress": "進捗: {current}/{total}",
+        "repair_running": "修復中...",
+        "repair_stage_scan": "復旧可能なストリームを解析中 ({current}/{total}): {file}",
+        "repair_stage_remux": "コンテナ修復を試行中 ({current}/{total}): {file}",
+        "repair_stage_verify": "修復結果を検証中 ({current}/{total}): {file}",
+        "repair_stage_transcode": "再エンコード救済を試行中 ({current}/{total}): {file}",
+        "repair_stage_ts_probe": "TS 断片として解析中 ({current}/{total}): {file}",
+        "repair_stage_ts_remux": "TS 断片としてコンテナ修復中 ({current}/{total}): {file}",
+        "repair_stage_ts_transcode": "TS 断片として再エンコード救済中 ({current}/{total}): {file}",
+        "repair_stage_missing": "元ファイルが見つかりません ({current}/{total}): {file}",
+        "copy_detail": "詳細をコピー",
         "settings_lang": "表示言語",
         "settings_theme": "テーマ",
         "settings_download": "ダウンロード調整",
@@ -1135,6 +1168,8 @@ def normalize_repair_error_detail(detail: str | None) -> str:
     if not detail:
         return "ffmpeg 无法读取这个视频文件，可能文件已损坏或格式并非有效 MP4。"
     lowered_detail = detail.lower()
+    if "__no_recoverable_stream__" in lowered_detail:
+        return "未探测到可恢复的音视频流，当前无法自动修复，建议回到原始 m3u8 重新下载。"
     if "error opening input" in lowered_detail or "invalid data found when processing input" in lowered_detail:
         return "ffmpeg 无法读取该视频文件，文件可能已经严重损坏，当前无法自动修复。"
 
@@ -1429,8 +1464,18 @@ def validate_output_media(path: Path, options: DownloadOptions) -> tuple[bool, s
     return True, None
 
 
-def repair_media_file(source_path: Path, options: DownloadOptions) -> MediaRepairResult:
+def repair_media_file(
+    source_path: Path,
+    options: DownloadOptions,
+    on_stage: Callable[[str], None] | None = None,
+) -> MediaRepairResult:
     source = source_path.expanduser().resolve()
+
+    def emit_stage(stage: str) -> None:
+        if on_stage:
+            on_stage(stage)
+
+    emit_stage("scan")
     media_ok, media_reason = validate_output_media(source, options)
     if media_ok:
         return MediaRepairResult(status="noop")
@@ -1459,6 +1504,7 @@ def repair_media_file(source_path: Path, options: DownloadOptions) -> MediaRepai
         "ignore_err",
     ]
 
+    emit_stage("remux")
     remux_cmd = [
         options.ffmpeg,
         "-hide_banner",
@@ -1478,12 +1524,14 @@ def repair_media_file(source_path: Path, options: DownloadOptions) -> MediaRepai
     ]
     ok, err = run_ffmpeg_command(remux_cmd)
     if ok:
+        emit_stage("verify")
         repaired_ok, repaired_reason = validate_output_media(working_output, options)
         if repaired_ok:
             return finish_success("remux")
         err = repaired_reason or "invalid repaired output"
         cleanup_file(working_output)
 
+    emit_stage("transcode")
     transcode_cmd = [
         options.ffmpeg,
         "-hide_banner",
@@ -1515,15 +1563,18 @@ def repair_media_file(source_path: Path, options: DownloadOptions) -> MediaRepai
     ]
     ok2, err2 = run_ffmpeg_command(transcode_cmd)
     if ok2:
+        emit_stage("verify")
         repaired_ok2, repaired_reason2 = validate_output_media(working_output, options)
         if repaired_ok2:
             return finish_success("transcode")
         err2 = repaired_reason2 or "invalid transcoded output"
 
+    emit_stage("ts_probe")
     ts_format = probe_media_format_name(source, options, forced_format="mpegts")
     ts_err: str | None = None
     ts_err2: str | None = None
     if ts_format == "mpegts":
+        emit_stage("ts_remux")
         ts_remux_cmd = [
             options.ffmpeg,
             "-hide_banner",
@@ -1548,12 +1599,14 @@ def repair_media_file(source_path: Path, options: DownloadOptions) -> MediaRepai
         ]
         ok3, ts_err = run_ffmpeg_command(ts_remux_cmd)
         if ok3:
+            emit_stage("verify")
             repaired_ok3, repaired_reason3 = validate_output_media(working_output, options)
             if repaired_ok3:
                 return finish_success("remux")
             ts_err = repaired_reason3 or "invalid ts remux output"
             cleanup_file(working_output)
 
+        emit_stage("ts_transcode")
         ts_transcode_cmd = [
             options.ffmpeg,
             "-hide_banner",
@@ -1588,6 +1641,7 @@ def repair_media_file(source_path: Path, options: DownloadOptions) -> MediaRepai
         ]
         ok4, ts_err2 = run_ffmpeg_command(ts_transcode_cmd)
         if ok4:
+            emit_stage("verify")
             repaired_ok4, repaired_reason4 = validate_output_media(working_output, options)
             if repaired_ok4:
                 return finish_success("transcode")
@@ -1598,6 +1652,9 @@ def repair_media_file(source_path: Path, options: DownloadOptions) -> MediaRepai
     detail_parts = [media_reason, err or "remux failed", err2 or "transcode failed"]
     if ts_format == "mpegts":
         detail_parts.extend([ts_err or "ts remux failed", ts_err2 or "ts transcode failed"])
+        if any("Output file does not contain any stream" in str(part) for part in detail_parts if part):
+            detail = normalize_repair_error_detail("__NO_RECOVERABLE_STREAM__")
+            return MediaRepairResult(status="failed", detail=detail)
         if any("Output file does not contain any stream" in str(part) for part in detail_parts if part):
             detail_parts = ["检测到该文件更像 TS 残片，但里面没有可恢复的音视频流，建议重新下载原始 m3u8 后再导出。"]
     detail = normalize_repair_error_detail("; ".join(part for part in detail_parts if part))
@@ -2023,6 +2080,40 @@ class BatchWorker(QObject):
         self.batch_done.emit(success, skipped + deleted, failed, failure_file)
 
 
+class RepairWorker(QObject):
+    progress = Signal(int, int, str, str)
+    finished = Signal(object)
+
+    def __init__(self, sources: list[Path], options: DownloadOptions):
+        super().__init__()
+        self.sources = sources
+        self.options = options
+
+    @Slot()
+    def run(self) -> None:
+        results: list[tuple[Path, MediaRepairResult]] = []
+        total = len(self.sources)
+        for current, source in enumerate(self.sources, start=1):
+            def emit_stage(stage: str, current_index: int = current, file_name: str = source.name) -> None:
+                self.progress.emit(current_index, total, file_name, stage)
+
+            if not source.exists():
+                emit_stage("missing")
+                results.append(
+                    (
+                        source,
+                        MediaRepairResult(
+                            status="failed",
+                            detail="source_missing",
+                        ),
+                    )
+                )
+            else:
+                results.append((source, repair_media_file(source, self.options, emit_stage)))
+            self.progress.emit(current, total, source.name, "done")
+        self.finished.emit(results)
+
+
 @dataclass
 class LocalApiRequest:
     path: str
@@ -2164,6 +2255,8 @@ class MainWindow(QMainWindow):
         self.settings_anim: QParallelAnimationGroup | None = None
         self.worker_thread: QThread | None = None
         self.worker: BatchWorker | None = None
+        self.repair_thread: QThread | None = None
+        self.repair_worker: RepairWorker | None = None
         self.row_by_index: dict[int, int] = {}
         self.progress_by_index: dict[int, QProgressBar] = {}
         self.pause_btn_by_index: dict[int, QPushButton] = {}
@@ -2182,6 +2275,8 @@ class MainWindow(QMainWindow):
         self.nav_buttons: dict[str, QPushButton] = {}
         self.page_index_map: dict[str, int] = {}
         self.repair_output_paths: list[Path] = []
+        self.repair_active_sources: list[Path] = []
+        self.repair_completed_count = 0
 
         self._build_ui()
         self._build_menu_bar()
@@ -2796,11 +2891,21 @@ class MainWindow(QMainWindow):
         self.repair_status_label = QLabel("")
         self.repair_status_label.setObjectName("hintText")
         self.repair_status_label.setWordWrap(True)
+        self.repair_progress_label = QLabel("")
+        self.repair_progress_label.setObjectName("hintText")
+        self.repair_progress_label.setVisible(False)
+        self.repair_progress_bar = QProgressBar()
+        self.repair_progress_bar.setRange(0, 100)
+        self.repair_progress_bar.setValue(0)
+        self.repair_progress_bar.setFormat("%p%")
+        self.repair_progress_bar.setVisible(False)
 
         repair_card_layout.addWidget(self.repair_file_label)
         repair_card_layout.addWidget(self.repair_hint_label)
         repair_card_layout.addWidget(self.repair_path_input)
         repair_card_layout.addLayout(repair_actions)
+        repair_card_layout.addWidget(self.repair_progress_label)
+        repair_card_layout.addWidget(self.repair_progress_bar)
         repair_card_layout.addWidget(self.repair_status_label)
         repair_layout.addWidget(repair_card)
         repair_layout.addStretch(1)
@@ -3044,10 +3149,14 @@ class MainWindow(QMainWindow):
         self.repair_hint_label.setText(self.t("repair_file_hint"))
         self.repair_path_input.setPlaceholderText(self.t("repair_placeholder"))
         self.repair_choose_btn.setText(self.t("repair_choose"))
-        self.repair_start_btn.setText(self.t("repair_start"))
+        self.repair_start_btn.setText(self.t("repair_running") if self.repair_thread else self.t("repair_start"))
         self.repair_open_btn.setText(self.t("repair_open_output"))
         if not self.repair_status_label.text():
             self.repair_status_label.setText(self.t("repair_idle"))
+        if self.repair_progress_label.isVisible() and self.repair_active_sources:
+            total = len(self.repair_active_sources)
+            current = min(self.repair_completed_count, total)
+            self.repair_progress_label.setText(self.t("repair_progress", current=current, total=total))
 
         self.settings_title_label.setText(self.t("settings_title"))
         self.lang_label.setText(self.t("settings_lang"))
@@ -3792,7 +3901,44 @@ class MainWindow(QMainWindow):
         self._set_repair_sources([Path(file_path).expanduser().resolve() for file_path in file_paths])
         return True
 
+    def _set_repair_running(self, running: bool) -> None:
+        self.repair_start_btn.setEnabled(not running)
+        self.repair_start_btn.setText(self.t("repair_running") if running else self.t("repair_start"))
+        self.repair_open_btn.setEnabled((not running) and bool(self.repair_output_paths))
+        self.repair_progress_label.setHidden(not running)
+        self.repair_progress_bar.setHidden(not running)
+        if not running:
+            self.repair_completed_count = 0
+            self.repair_progress_bar.setRange(0, 100)
+            self.repair_progress_bar.setValue(0)
+            self.repair_progress_bar.setFormat("%p%")
+            self.repair_progress_label.clear()
+
+    def _start_repair_session(self, sources: list[Path], options: DownloadOptions) -> None:
+        if self.repair_thread:
+            return
+        self.repair_active_sources = sources
+        self.repair_output_paths = []
+        self.repair_completed_count = 0
+        self.repair_status_label.setText(self.t("detail_validating"))
+        self.repair_progress_label.setText(self.t("repair_progress", current=0, total=len(sources)))
+        self._set_repair_running(True)
+        self.repair_progress_bar.setRange(0, 0)
+        self.repair_progress_bar.setFormat("")
+
+        self.repair_thread = QThread(self)
+        self.repair_worker = RepairWorker(sources, options)
+        self.repair_worker.moveToThread(self.repair_thread)
+        self.repair_thread.started.connect(self.repair_worker.run)
+        self.repair_worker.progress.connect(self._on_repair_progress)
+        self.repair_worker.finished.connect(self._on_repair_finished)
+        self.repair_worker.finished.connect(self.repair_thread.quit)
+        self.repair_thread.finished.connect(self._on_repair_thread_finished)
+        self.repair_thread.start()
+
     def _run_repair_from_page(self) -> None:
+        if self.repair_thread and self.repair_thread.isRunning():
+            return
         sources = self._collect_repair_sources()
         if not sources:
             self._show_copyable_message(QMessageBox.Warning, self.t("tip"), self.t("tip_repair_missing"))
@@ -3805,33 +3951,44 @@ class MainWindow(QMainWindow):
             self._show_copyable_message(QMessageBox.Critical, title, str(exc))
             return
 
-        self.repair_status_label.setText(self.t("detail_validating"))
-        self.repair_open_btn.setEnabled(False)
-        self.repair_output_paths = []
+        self._start_repair_session(sources, options)
 
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        try:
-            results: list[tuple[Path, MediaRepairResult]] = []
-            for current, source in enumerate(sources, start=1):
-                self.repair_status_label.setText(
-                    self.t("repair_processing", current=current, total=len(sources), file=source.name)
-                )
-                QApplication.processEvents()
-                if not source.exists():
-                    results.append(
-                        (
-                            source,
-                            MediaRepairResult(
-                                status="failed",
-                                detail=self.t("tip_repair_missing"),
-                            ),
-                        )
-                    )
-                    continue
-                results.append((source, repair_media_file(source, options)))
-        finally:
-            QApplication.restoreOverrideCursor()
+    @Slot(int, int, str, str)
+    def _on_repair_progress(self, current: int, total: int, file_name: str, stage: str) -> None:
+        if stage == "done":
+            self.repair_completed_count = current
+            self.repair_progress_label.setText(self.t("repair_progress", current=current, total=total))
+            self.repair_progress_bar.setRange(0, max(1, total))
+            self.repair_progress_bar.setValue(current)
+            self.repair_progress_bar.setFormat("%v/%m")
+            self.repair_status_label.setText(
+                self.t("repair_processing", current=current, total=total, file=file_name)
+            )
+            return
 
+        completed = max(0, current - 1)
+        self.repair_completed_count = max(self.repair_completed_count, completed)
+        self.repair_progress_label.setText(
+            self.t("repair_progress", current=self.repair_completed_count, total=total)
+        )
+        self.repair_progress_bar.setRange(0, 0)
+        self.repair_progress_bar.setFormat("")
+
+        stage_key = f"repair_stage_{stage}"
+        stage_text = I18N.get(self.current_lang, {}).get(stage_key)
+        if stage_text:
+            self.repair_status_label.setText(
+                self.t(stage_key, current=current, total=total, file=file_name)
+            )
+        else:
+            self.repair_status_label.setText(
+                self.t("repair_processing", current=current, total=total, file=file_name)
+            )
+
+    @Slot(object)
+    def _on_repair_finished(self, results: object) -> None:
+        if not isinstance(results, list):
+            return
         if len(results) == 1:
             source, result = results[0]
             if result.status == "noop":
@@ -3851,10 +4008,11 @@ class MainWindow(QMainWindow):
                 return
 
             detail = result.detail or self.t("repair_result_failed")
-            if not source.exists() and detail == self.t("tip_repair_missing"):
+            if result.detail == "source_missing":
                 self.repair_status_label.setText(self.t("tip_repair_missing"))
                 self._show_copyable_message(QMessageBox.Warning, self.t("tip"), self.t("tip_repair_missing"))
                 return
+            detail = normalize_repair_error_detail(detail)
             summary = self.t("repair_result_failed_detail", detail=detail)
             self.repair_status_label.setText(summary)
             self._show_copyable_message(QMessageBox.Warning, self.t("tip"), summary, detail)
@@ -3876,12 +4034,14 @@ class MainWindow(QMainWindow):
                 details.append(f"{source.name}: {self.t('repair_result_healthy')}")
             else:
                 failed += 1
+                detail_text = self.t("tip_repair_missing") if result.detail == "source_missing" else (
+                    normalize_repair_error_detail(result.detail or self.t("repair_result_failed"))
+                )
                 details.append(
-                    f"{source.name}: {self.t('repair_result_failed_detail', detail=result.detail or self.t('repair_result_failed'))}"
+                    f"{source.name}: {self.t('repair_result_failed_detail', detail=detail_text)}"
                 )
 
         self.repair_output_paths = repaired_outputs
-        self.repair_open_btn.setEnabled(bool(repaired_outputs))
 
         summary = self.t("repair_result_batch", success=success, skipped=skipped, failed=failed)
         detail_text = "\n".join(details[:10])
@@ -3899,6 +4059,17 @@ class MainWindow(QMainWindow):
             self._show_copyable_message(QMessageBox.Warning, self.t("tip"), summary, message)
         else:
             self._show_copyable_message(QMessageBox.Information, self.t("tip"), message)
+
+    @Slot()
+    def _on_repair_thread_finished(self) -> None:
+        if self.repair_worker:
+            self.repair_worker.deleteLater()
+            self.repair_worker = None
+        if self.repair_thread:
+            self.repair_thread.deleteLater()
+            self.repair_thread = None
+        self._set_repair_running(False)
+        self.repair_active_sources = []
 
     def _open_repaired_output(self) -> None:
         if not self.repair_output_paths:
@@ -4096,7 +4267,7 @@ class MainWindow(QMainWindow):
         box.setStandardButtons(QMessageBox.Ok)
         if detail and detail != text:
             box.setDetailedText(detail)
-            copy_btn = box.addButton("复制详情", QMessageBox.ActionRole)
+            copy_btn = box.addButton(self.t("copy_detail"), QMessageBox.ActionRole)
             copy_btn.clicked.connect(lambda: QApplication.clipboard().setText(detail))
         box.exec()
 
