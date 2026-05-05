@@ -110,10 +110,11 @@ Name: "desktopicon"; Description: "Create a desktop icon"; GroupDescription: "Ad
 
 [Files]
 Source: "{app_exe}"; DestDir: "{{app}}"; Flags: ignoreversion
+Source: "{WINDOWS_ICON_PATH}"; DestDir: "{{app}}"; DestName: "app_icon.ico"; Flags: ignoreversion
 
 [Icons]
-Name: "{{autoprograms}}\\{APP_DISPLAY_NAME}"; Filename: "{{app}}\\{APP_NAME}.exe"; IconFilename: "{{app}}\\{APP_NAME}.exe"; IconIndex: 0
-Name: "{{autodesktop}}\\{APP_DISPLAY_NAME}"; Filename: "{{app}}\\{APP_NAME}.exe"; IconFilename: "{{app}}\\{APP_NAME}.exe"; IconIndex: 0; Tasks: desktopicon
+Name: "{{autoprograms}}\\{APP_DISPLAY_NAME}"; Filename: "{{app}}\\{APP_NAME}.exe"; IconFilename: "{{app}}\\app_icon.ico"
+Name: "{{autodesktop}}\\{APP_DISPLAY_NAME}"; Filename: "{{app}}\\{APP_NAME}.exe"; IconFilename: "{{app}}\\app_icon.ico"; Tasks: desktopicon
 
 [Run]
 Filename: "{{app}}\\{APP_NAME}.exe"; Description: "Launch {APP_DISPLAY_NAME}"; Flags: nowait postinstall skipifsilent

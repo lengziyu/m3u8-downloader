@@ -1157,6 +1157,29 @@ def normalize_repair_error_detail(detail: str | None) -> str:
     return "；".join(parts[:3])
 
 
+def probe_media_format_name(path: Path, options: DownloadOptions, forced_format: str | None = None) -> str | None:
+    if not options.ffprobe:
+        return None
+    cmd = [options.ffprobe, "-hide_banner", "-v", "error"]
+    if forced_format:
+        cmd.extend(["-f", forced_format])
+    cmd.extend(["-show_entries", "format=format_name", "-of", "default=nw=1:nk=1", str(path)])
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=20,
+            **subprocess_no_window_kwargs(),
+        )
+    except Exception:
+        return None
+    if proc.returncode != 0:
+        return None
+    value = (proc.stdout or "").strip().splitlines()
+    return value[0].strip() if value else None
+
+
 def build_sidecar_output_path(path: Path, tag: str) -> Path:
     stem = path.stem or "video"
     suffix = path.suffix or ".mp4"
@@ -1497,10 +1520,87 @@ def repair_media_file(source_path: Path, options: DownloadOptions) -> MediaRepai
             return finish_success("transcode")
         err2 = repaired_reason2 or "invalid transcoded output"
 
+    ts_format = probe_media_format_name(source, options, forced_format="mpegts")
+    ts_err: str | None = None
+    ts_err2: str | None = None
+    if ts_format == "mpegts":
+        ts_remux_cmd = [
+            options.ffmpeg,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "mpegts",
+            *repair_input_args,
+            "-ignore_unknown",
+            "-i",
+            str(source),
+            "-map",
+            "0:v?",
+            "-map",
+            "0:a?",
+            "-c",
+            "copy",
+            "-movflags",
+            "+faststart",
+            str(working_output),
+        ]
+        ok3, ts_err = run_ffmpeg_command(ts_remux_cmd)
+        if ok3:
+            repaired_ok3, repaired_reason3 = validate_output_media(working_output, options)
+            if repaired_ok3:
+                return finish_success("remux")
+            ts_err = repaired_reason3 or "invalid ts remux output"
+            cleanup_file(working_output)
+
+        ts_transcode_cmd = [
+            options.ffmpeg,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "mpegts",
+            *repair_input_args,
+            "-ignore_unknown",
+            "-i",
+            str(source),
+            "-map",
+            "0:v?",
+            "-map",
+            "0:a?",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "23",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            "-movflags",
+            "+faststart",
+            str(working_output),
+        ]
+        ok4, ts_err2 = run_ffmpeg_command(ts_transcode_cmd)
+        if ok4:
+            repaired_ok4, repaired_reason4 = validate_output_media(working_output, options)
+            if repaired_ok4:
+                return finish_success("transcode")
+            ts_err2 = repaired_reason4 or "invalid ts transcode output"
+            cleanup_file(working_output)
+
     cleanup_file(working_output)
-    detail = normalize_repair_error_detail("; ".join(
-        part for part in [media_reason, err or "remux failed", err2 or "transcode failed"] if part
-    ))
+    detail_parts = [media_reason, err or "remux failed", err2 or "transcode failed"]
+    if ts_format == "mpegts":
+        detail_parts.extend([ts_err or "ts remux failed", ts_err2 or "ts transcode failed"])
+        if any("Output file does not contain any stream" in str(part) for part in detail_parts if part):
+            detail_parts = ["检测到该文件更像 TS 残片，但里面没有可恢复的音视频流，建议重新下载原始 m3u8 后再导出。"]
+    detail = normalize_repair_error_detail("; ".join(part for part in detail_parts if part))
     return MediaRepairResult(status="failed", detail=detail)
 
 
@@ -3695,14 +3795,14 @@ class MainWindow(QMainWindow):
     def _run_repair_from_page(self) -> None:
         sources = self._collect_repair_sources()
         if not sources:
-            QMessageBox.warning(self, self.t("tip"), self.t("tip_repair_missing"))
+            self._show_copyable_message(QMessageBox.Warning, self.t("tip"), self.t("tip_repair_missing"))
             return
 
         try:
             options = self._build_default_options()
         except Exception as exc:
             title = self.t("ffmpeg_missing") if isinstance(exc, FileNotFoundError) else self.t("tip")
-            QMessageBox.critical(self, title, str(exc))
+            self._show_copyable_message(QMessageBox.Critical, title, str(exc))
             return
 
         self.repair_status_label.setText(self.t("detail_validating"))
@@ -3736,7 +3836,7 @@ class MainWindow(QMainWindow):
             source, result = results[0]
             if result.status == "noop":
                 self.repair_status_label.setText(self.t("repair_result_healthy"))
-                QMessageBox.information(self, self.t("tip"), self.t("repair_result_healthy"))
+                self._show_copyable_message(QMessageBox.Information, self.t("tip"), self.t("repair_result_healthy"))
                 return
 
             if result.status == "ok" and result.output_path:
@@ -3747,20 +3847,17 @@ class MainWindow(QMainWindow):
                 else:
                     message = self.t("repair_result_remux", file=str(result.output_path))
                 self.repair_status_label.setText(message)
-                QMessageBox.information(self, self.t("tip"), message)
+                self._show_copyable_message(QMessageBox.Information, self.t("tip"), message)
                 return
 
             detail = result.detail or self.t("repair_result_failed")
             if not source.exists() and detail == self.t("tip_repair_missing"):
                 self.repair_status_label.setText(self.t("tip_repair_missing"))
-                QMessageBox.warning(self, self.t("tip"), self.t("tip_repair_missing"))
+                self._show_copyable_message(QMessageBox.Warning, self.t("tip"), self.t("tip_repair_missing"))
                 return
-            self.repair_status_label.setText(self.t("repair_result_failed_detail", detail=detail))
-            QMessageBox.warning(
-                self,
-                self.t("tip"),
-                self.t("repair_result_failed_detail", detail=detail),
-            )
+            summary = self.t("repair_result_failed_detail", detail=detail)
+            self.repair_status_label.setText(summary)
+            self._show_copyable_message(QMessageBox.Warning, self.t("tip"), summary, detail)
             return
 
         success = 0
@@ -3799,9 +3896,9 @@ class MainWindow(QMainWindow):
         )
         self.repair_status_label.setText(summary)
         if failed > 0:
-            QMessageBox.warning(self, self.t("tip"), message)
+            self._show_copyable_message(QMessageBox.Warning, self.t("tip"), summary, message)
         else:
-            QMessageBox.information(self, self.t("tip"), message)
+            self._show_copyable_message(QMessageBox.Information, self.t("tip"), message)
 
     def _open_repaired_output(self) -> None:
         if not self.repair_output_paths:
@@ -3960,7 +4057,7 @@ class MainWindow(QMainWindow):
     def _refresh_single_input_scroll_height(self) -> None:
         visible_rows = max(1, min(3, len(self.single_url_inputs)))
         row_height = 44
-        height = 4 + visible_rows * row_height + (visible_rows - 1) * 8 + 4
+        height = 8 + visible_rows * row_height + (visible_rows - 1) * 8 + 8
         self.single_scroll.setMinimumHeight(height)
         self.single_scroll.setMaximumHeight(height)
         self.single_scroll.setVerticalScrollBarPolicy(
@@ -3971,13 +4068,37 @@ class MainWindow(QMainWindow):
     def _refresh_input_tabs_height(self) -> None:
         if not hasattr(self, "input_tabs"):
             return
+        if not hasattr(self, "single_scroll"):
+            return
+        tab_bar_height = self.input_tabs.tabBar().sizeHint().height() if self.input_tabs.tabBar() else 32
         if self.input_tabs.currentIndex() == 0:
             content_height = self.single_scroll.maximumHeight()
-            target_height = content_height + 28
+            target_height = tab_bar_height + content_height + 22
         else:
-            target_height = 184
+            if not hasattr(self, "url_input"):
+                return
+            target_height = tab_bar_height + self.url_input.maximumHeight() + 56
         self.input_tabs.setMinimumHeight(target_height)
         self.input_tabs.setMaximumHeight(target_height)
+
+    def _show_copyable_message(
+        self,
+        icon: QMessageBox.Icon,
+        title: str,
+        text: str,
+        detail: str | None = None,
+    ) -> None:
+        box = QMessageBox(self)
+        box.setIcon(icon)
+        box.setWindowTitle(title)
+        box.setText(text)
+        box.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard)
+        box.setStandardButtons(QMessageBox.Ok)
+        if detail and detail != text:
+            box.setDetailedText(detail)
+            copy_btn = box.addButton("复制详情", QMessageBox.ActionRole)
+            copy_btn.clicked.connect(lambda: QApplication.clipboard().setText(detail))
+        box.exec()
 
     def _remove_single_input_row(self, line: QLineEdit) -> None:
         if line in self.single_url_inputs:
