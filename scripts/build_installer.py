@@ -12,11 +12,13 @@ from pathlib import Path
 
 
 APP_NAME = "Taoying"
+APP_DISPLAY_NAME = "桃影"
 MAC_APP_ID = "com.lens.taoying"
 # Inno Setup AppId should use GUID form (escaped with double '{{' in iss).
 WIN_APP_ID = "{{8A8D3E35-2D02-4D88-A8D0-4D1D6D2F7C31}"
 ROOT = Path(__file__).resolve().parent.parent
 DIST_DIR = ROOT / "dist"
+WINDOWS_ICON_PATH = ROOT / "assets" / "app_icon.ico"
 
 
 def read_project_version(default: str = "1.0.0") -> str:
@@ -62,10 +64,12 @@ def normalize_installer_version(version: str) -> str:
 
 
 def find_iscc() -> str:
+    local_programs = Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Inno Setup 6" / "ISCC.exe"
     candidates = [
         shutil.which("iscc"),
         r"C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
         r"C:\Program Files\Inno Setup 6\ISCC.exe",
+        str(local_programs) if str(local_programs) else None,
     ]
     for path in candidates:
         if path and Path(path).exists():
@@ -81,13 +85,14 @@ def build_windows_installer(version: str) -> Path:
         raise FileNotFoundError(f"未找到可打包应用：{app_exe}")
 
     iscc = find_iscc()
+    setup_icon_line = f"SetupIconFile={WINDOWS_ICON_PATH}\n" if WINDOWS_ICON_PATH.exists() else ""
     iss_content = f"""
 [Setup]
 AppId={WIN_APP_ID}
-AppName={APP_NAME}
+AppName={APP_DISPLAY_NAME}
 AppVersion={version}
 DefaultDirName={{{{autopf}}}}\\{APP_NAME}
-DefaultGroupName={APP_NAME}
+DefaultGroupName={APP_DISPLAY_NAME}
 OutputDir={DIST_DIR}
 OutputBaseFilename={APP_NAME}-Setup
 Compression=lzma
@@ -95,6 +100,7 @@ SolidCompression=yes
 WizardStyle=modern
 DisableProgramGroupPage=yes
 UninstallDisplayIcon={{{{app}}}}\\{APP_NAME}.exe
+{setup_icon_line}
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -106,11 +112,11 @@ Name: "desktopicon"; Description: "Create a desktop icon"; GroupDescription: "Ad
 Source: "{app_exe}"; DestDir: "{{app}}"; Flags: ignoreversion
 
 [Icons]
-Name: "{{autoprograms}}\\{APP_NAME}"; Filename: "{{app}}\\{APP_NAME}.exe"
-Name: "{{autodesktop}}\\{APP_NAME}"; Filename: "{{app}}\\{APP_NAME}.exe"; Tasks: desktopicon
+Name: "{{autoprograms}}\\{APP_DISPLAY_NAME}"; Filename: "{{app}}\\{APP_NAME}.exe"
+Name: "{{autodesktop}}\\{APP_DISPLAY_NAME}"; Filename: "{{app}}\\{APP_NAME}.exe"; Tasks: desktopicon
 
 [Run]
-Filename: "{{app}}\\{APP_NAME}.exe"; Description: "Launch {APP_NAME}"; Flags: nowait postinstall skipifsilent
+Filename: "{{app}}\\{APP_NAME}.exe"; Description: "Launch {APP_DISPLAY_NAME}"; Flags: nowait postinstall skipifsilent
 """
     with tempfile.TemporaryDirectory() as td:
         iss_file = Path(td) / "installer.iss"

@@ -12,9 +12,11 @@ from urllib.parse import urlparse
 
 
 APP_NAME = "Taoying"
+APP_DISPLAY_NAME = "桃影"
 ROOT = Path(__file__).resolve().parent.parent
 DIST_DIR = ROOT / "dist"
 DEFAULT_VENV_DIR = ROOT / ".build-venv"
+WINDOWS_ICON_PATH = ROOT / "assets" / "app_icon.ico"
 PIP_TRUSTED_HOSTS = ["pypi.org", "files.pythonhosted.org", "pypi.python.org"]
 PIP_INSTALL_FLAGS = ["--default-timeout", "120", "--retries", "10"]
 
@@ -132,6 +134,8 @@ def build_app(
 
     if is_windows:
         cmd.append("--onefile")
+        if WINDOWS_ICON_PATH.exists():
+            cmd.extend(["--icon", str(WINDOWS_ICON_PATH)])
 
     ffmpeg, ffprobe = resolve_system_binaries()
     bundled_items: list[str] = []

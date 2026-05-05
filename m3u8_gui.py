@@ -29,6 +29,7 @@ from PySide6.QtCore import (
     QParallelAnimationGroup,
     QPropertyAnimation,
     QRectF,
+    QSize,
     QStandardPaths,
     Qt,
     QThread,
@@ -75,6 +76,39 @@ DEFAULT_APP_VERSION = "1.1.0"
 LOCAL_API_HOST = "127.0.0.1"
 LOCAL_API_PORT = 38427
 _FFMPEG_OPTION_SUPPORT_CACHE: dict[tuple[str, str], bool] = {}
+
+
+@dataclass(frozen=True)
+class DownloadTask:
+    index: int
+    url: str
+    output_path: Path
+    referer: str | None = None
+    headers: tuple[str, ...] = ()
+    user_agent: str | None = None
+    source_page_url: str | None = None
+
+
+@dataclass(frozen=True)
+class DownloadOptions:
+    ffmpeg: str
+    ffprobe: str | None
+    retries: int
+    overwrite: bool
+    timeout: int
+    user_agent: str | None = None
+    referer: str | None = None
+    headers: list[str] | tuple[str, ...] = ()
+    transcode_on_fail: bool = True
+    validate_after_copy: bool = True
+
+
+@dataclass(frozen=True)
+class MediaRepairResult:
+    status: str
+    output_path: Path | None = None
+    method: str | None = None
+    detail: str | None = None
 
 
 def normalize_version_text(text: str) -> str:
@@ -243,10 +277,13 @@ I18N = {
         "page_settings_sub": "主题、语言、并发和重试都集中放在这里。",
         "dir_hint": "当前目录会用于下载输出，也会作为修复视频的默认选择位置。",
         "repair_file_label": "待修复文件",
+        "repair_file_hint": "支持多选，也支持每行一个本地视频路径；修复结果会另存，不覆盖原文件。",
         "repair_choose": "选择视频",
         "repair_start": "开始修复",
         "repair_open_output": "打开修复结果",
-        "repair_idle": "选择一个 mp4 文件后点击开始修复，修复结果会另存，不覆盖原文件。",
+        "repair_idle": "选择一个或多个 mp4 文件后点击开始修复，修复结果会另存，不覆盖原文件。",
+        "repair_placeholder": "K:/video/example.mp4\nK:/video/broken.mp4",
+        "repair_processing": "正在修复（{current}/{total}）：{file}",
         "settings_lang": "界面语言",
         "settings_theme": "界面主题",
         "settings_download": "下载调优",
@@ -269,6 +306,8 @@ I18N = {
         "repair_result_transcode": "修复完成，已生成新的转码文件：\n{file}",
         "repair_result_failed": "修复失败。",
         "repair_result_failed_detail": "修复失败：{detail}",
+        "repair_result_batch": "批量修复完成：成功 {success} / 无需修复 {skipped} / 失败 {failed}",
+        "repair_result_batch_detail": "批量修复完成：成功 {success} / 无需修复 {skipped} / 失败 {failed}\n\n{details}",
     },
     "en": {
         "settings_toggle": "Settings",
@@ -382,10 +421,13 @@ I18N = {
         "page_settings_sub": "Language, theme, concurrency, and retries live here.",
         "dir_hint": "This folder is used for downloads and also becomes the default starting location for repair.",
         "repair_file_label": "Source File",
+        "repair_file_hint": "Supports multi-select or one local video path per line. Repaired files are saved separately.",
         "repair_choose": "Choose Video",
         "repair_start": "Repair Now",
         "repair_open_output": "Open Repaired File",
-        "repair_idle": "Choose an mp4 file and start repair. The result is saved as a new file.",
+        "repair_idle": "Choose one or more mp4 files and start repair. Results are saved as new files.",
+        "repair_placeholder": "C:/video/example.mp4\nD:/video/broken.mp4",
+        "repair_processing": "Repairing ({current}/{total}): {file}",
         "settings_lang": "Language",
         "settings_theme": "Theme",
         "settings_download": "Download Tuning",
@@ -408,6 +450,8 @@ I18N = {
         "repair_result_transcode": "Repair complete. A new transcoded file was created:\n{file}",
         "repair_result_failed": "Repair failed.",
         "repair_result_failed_detail": "Repair failed: {detail}",
+        "repair_result_batch": "Batch repair finished: success {success} / no repair needed {skipped} / failed {failed}",
+        "repair_result_batch_detail": "Batch repair finished: success {success} / no repair needed {skipped} / failed {failed}\n\n{details}",
     },
     "ja": {
         "settings_toggle": "設定",
@@ -521,10 +565,13 @@ I18N = {
         "page_settings_sub": "言語、テーマ、同時実行数、再試行回数をここで調整できます。",
         "dir_hint": "このフォルダーはダウンロード保存先であり、動画修復の初期選択場所にも使われます。",
         "repair_file_label": "修復対象ファイル",
+        "repair_file_hint": "複数選択、または 1 行に 1 つずつローカル動画パスを貼り付けられます。結果は別名保存されます。",
         "repair_choose": "動画を選択",
         "repair_start": "修復開始",
         "repair_open_output": "修復結果を開く",
-        "repair_idle": "mp4 ファイルを選択してから修復を開始してください。結果は別名で保存されます。",
+        "repair_idle": "1 つ以上の mp4 ファイルを選択してから修復を開始してください。結果は別名で保存されます。",
+        "repair_placeholder": "C:/video/example.mp4\nD:/video/broken.mp4",
+        "repair_processing": "修復中 ({current}/{total}): {file}",
         "settings_lang": "表示言語",
         "settings_theme": "テーマ",
         "settings_download": "ダウンロード調整",
@@ -547,8 +594,81 @@ I18N = {
         "repair_result_transcode": "修復完了。新しい再エンコードファイルを作成しました:\n{file}",
         "repair_result_failed": "修復に失敗しました。",
         "repair_result_failed_detail": "修復に失敗しました: {detail}",
+        "repair_result_batch": "一括修復完了: 成功 {success} / 修復不要 {skipped} / 失敗 {failed}",
+        "repair_result_batch_detail": "一括修復完了: 成功 {success} / 修復不要 {skipped} / 失敗 {failed}\n\n{details}",
     },
 }
+
+
+def sanitize_filename(name: str) -> str:
+    cleaned = re.sub(r"[\\/:*?\"<>|\x00-\x1f]+", "_", name).strip().strip(".")
+    return cleaned or "video"
+
+
+def is_probable_url(value: str) -> bool:
+    text = (value or "").strip()
+    if not text:
+        return False
+    parsed = urlparse(text)
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
+def build_output_name(index: int, url: str, custom_name: str | None) -> str:
+    if custom_name:
+        base = sanitize_filename(custom_name)
+    else:
+        parsed = urlparse(url)
+        path_parts = [unquote(p) for p in parsed.path.split("/") if p]
+        quality = sanitize_filename(path_parts[-2]) if len(path_parts) >= 2 else ""
+        source_id = sanitize_filename(path_parts[-3]) if len(path_parts) >= 3 else ""
+        fragment = sanitize_filename(unquote(parsed.fragment)) if parsed.fragment else ""
+
+        if fragment and quality:
+            base = f"{fragment}_{quality}"
+        elif fragment:
+            base = fragment
+        elif source_id and quality:
+            base = f"{source_id}_{quality}"
+        elif source_id:
+            base = source_id
+        else:
+            raw_name = Path(unquote(parsed.path)).stem
+            base = sanitize_filename(raw_name) if raw_name else f"video_{index:03d}"
+
+    if not base.lower().endswith(".mp4"):
+        return f"{base}.mp4"
+    return base
+
+
+def parse_url_lines(raw_text: str) -> list[tuple[str | None, str]]:
+    entries: list[tuple[str | None, str]] = []
+    for raw_line in raw_text.splitlines():
+        text = raw_line.strip()
+        if not text or text.startswith("#"):
+            continue
+
+        if "|" not in text:
+            if is_probable_url(text):
+                entries.append((None, text))
+            continue
+
+        parts = [part.strip() for part in text.split("|") if part.strip()]
+        if not parts:
+            continue
+
+        if len(parts) > 1 and all(is_probable_url(part) for part in parts):
+            entries.extend((None, part) for part in parts)
+            continue
+
+        last = parts[-1]
+        if is_probable_url(last):
+            name = "|".join(parts[:-1]).strip() or None
+            entries.append((name, last))
+            continue
+
+        if is_probable_url(text):
+            entries.append((None, text))
+    return entries
 
 
 def create_app_icon(size: int = 256) -> QIcon:
@@ -589,6 +709,59 @@ def create_app_icon(size: int = 256) -> QIcon:
 
     painter.setPen(QPen(QColor("#FFFFFF"), max(6, size // 34), Qt.SolidLine, Qt.RoundCap))
     painter.drawLine(int(size * 0.30), int(size * 0.78), int(size * 0.70), int(size * 0.78))
+    painter.end()
+    return QIcon(pix)
+
+
+def create_nav_icon(kind: str, color: QColor, size: int = 18) -> QIcon:
+    pix = QPixmap(size, size)
+    pix.fill(Qt.transparent)
+    painter = QPainter(pix)
+    painter.setRenderHint(QPainter.Antialiasing)
+
+    pen = QPen(color, max(1.6, size / 11), Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+    painter.setPen(pen)
+    painter.setBrush(Qt.NoBrush)
+
+    if kind == "download":
+        painter.drawLine(int(size * 0.5), int(size * 0.18), int(size * 0.5), int(size * 0.62))
+        painter.drawLine(int(size * 0.34), int(size * 0.48), int(size * 0.5), int(size * 0.66))
+        painter.drawLine(int(size * 0.66), int(size * 0.48), int(size * 0.5), int(size * 0.66))
+        painter.drawLine(int(size * 0.22), int(size * 0.80), int(size * 0.78), int(size * 0.80))
+    elif kind == "directory":
+        folder = QPainterPath()
+        folder.moveTo(size * 0.14, size * 0.38)
+        folder.lineTo(size * 0.34, size * 0.38)
+        folder.lineTo(size * 0.41, size * 0.24)
+        folder.lineTo(size * 0.83, size * 0.24)
+        folder.lineTo(size * 0.83, size * 0.74)
+        folder.lineTo(size * 0.14, size * 0.74)
+        folder.closeSubpath()
+        painter.drawPath(folder)
+        painter.drawLine(int(size * 0.14), int(size * 0.42), int(size * 0.83), int(size * 0.42))
+    elif kind == "repair":
+        frame = QPainterPath()
+        frame.addRoundedRect(QRectF(size * 0.16, size * 0.20, size * 0.52, size * 0.58), 3, 3)
+        painter.drawPath(frame)
+        play = QPainterPath()
+        play.moveTo(size * 0.38, size * 0.36)
+        play.lineTo(size * 0.38, size * 0.62)
+        play.lineTo(size * 0.57, size * 0.49)
+        play.closeSubpath()
+        painter.fillPath(play, color)
+        painter.drawLine(int(size * 0.72), int(size * 0.24), int(size * 0.72), int(size * 0.40))
+        painter.drawLine(int(size * 0.64), int(size * 0.32), int(size * 0.80), int(size * 0.32))
+        painter.drawLine(int(size * 0.78), int(size * 0.14), int(size * 0.78), int(size * 0.26))
+        painter.drawLine(int(size * 0.72), int(size * 0.20), int(size * 0.84), int(size * 0.20))
+    else:
+        painter.drawEllipse(QRectF(size * 0.30, size * 0.30, size * 0.40, size * 0.40))
+        for angle in range(0, 360, 45):
+            painter.save()
+            painter.translate(size * 0.5, size * 0.5)
+            painter.rotate(angle)
+            painter.drawLine(int(size * 0.0), int(-size * 0.34), int(size * 0.0), int(-size * 0.20))
+            painter.restore()
+
     painter.end()
     return QIcon(pix)
 
@@ -1869,7 +2042,7 @@ class MainWindow(QMainWindow):
         self.active_page = "download"
         self.nav_buttons: dict[str, QPushButton] = {}
         self.page_index_map: dict[str, int] = {}
-        self.repair_output_path: Path | None = None
+        self.repair_output_paths: list[Path] = []
 
         self._build_ui()
         self._build_menu_bar()
@@ -2171,12 +2344,12 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(root)
 
         shell = QHBoxLayout(root)
-        shell.setContentsMargins(18, 18, 18, 18)
-        shell.setSpacing(18)
+        shell.setContentsMargins(16, 16, 16, 16)
+        shell.setSpacing(16)
 
         self.sidebar = QFrame()
         self.sidebar.setObjectName("sidebar")
-        self.sidebar.setFixedWidth(228)
+        self.sidebar.setFixedWidth(216)
         sidebar_layout = QVBoxLayout(self.sidebar)
         sidebar_layout.setContentsMargins(18, 20, 18, 18)
         sidebar_layout.setSpacing(14)
@@ -2203,10 +2376,10 @@ class MainWindow(QMainWindow):
         self.sidebar_caption_label.setObjectName("navCaption")
         sidebar_layout.addWidget(self.sidebar_caption_label)
 
-        self.nav_download_btn = self._create_nav_button("↓", "nav_download", "download")
-        self.nav_directory_btn = self._create_nav_button("□", "nav_directory", "directory")
-        self.nav_repair_btn = self._create_nav_button("✦", "nav_repair", "repair")
-        self.nav_settings_btn = self._create_nav_button("⚙", "nav_settings", "settings")
+        self.nav_download_btn = self._create_nav_button("download", "nav_download", "download")
+        self.nav_directory_btn = self._create_nav_button("directory", "nav_directory", "directory")
+        self.nav_repair_btn = self._create_nav_button("repair", "nav_repair", "repair")
+        self.nav_settings_btn = self._create_nav_button("settings", "nav_settings", "settings")
 
         sidebar_layout.addWidget(self.nav_download_btn)
         sidebar_layout.addWidget(self.nav_directory_btn)
@@ -2221,13 +2394,13 @@ class MainWindow(QMainWindow):
         content = QWidget()
         content_layout = QVBoxLayout(content)
         content_layout.setContentsMargins(0, 0, 0, 0)
-        content_layout.setSpacing(16)
+        content_layout.setSpacing(12)
 
         self.header_card = QFrame()
         self.header_card.setObjectName("headerCard")
         header_layout = QVBoxLayout(self.header_card)
-        header_layout.setContentsMargins(28, 24, 28, 24)
-        header_layout.setSpacing(6)
+        header_layout.setContentsMargins(24, 20, 24, 20)
+        header_layout.setSpacing(4)
 
         self.page_badge_label = QLabel("")
         self.page_badge_label.setObjectName("pageBadge")
@@ -2254,15 +2427,15 @@ class MainWindow(QMainWindow):
         input_card = QFrame()
         input_card.setObjectName("card")
         input_layout = QVBoxLayout(input_card)
-        input_layout.setContentsMargins(22, 20, 22, 20)
-        input_layout.setSpacing(12)
+        input_layout.setContentsMargins(18, 16, 18, 16)
+        input_layout.setSpacing(10)
 
         self.input_title_label = QLabel("")
         self.input_title_label.setObjectName("sectionTitle")
 
         self.input_tabs = QTabWidget()
         self.input_tabs.setObjectName("inputTabs")
-        self.input_tabs.setMinimumHeight(210)
+        self.input_tabs.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
 
         single_tab = QWidget()
         single_layout = QVBoxLayout(single_tab)
@@ -2278,7 +2451,8 @@ class MainWindow(QMainWindow):
         self.single_scroll.setWidgetResizable(True)
         self.single_scroll.setFrameShape(QFrame.NoFrame)
         self.single_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.single_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.single_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.single_scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         self.single_container = QWidget()
         self.single_container.setObjectName("singleContainer")
@@ -2287,6 +2461,7 @@ class MainWindow(QMainWindow):
         self.single_lines_layout.setSpacing(8)
         self.single_url_inputs: list[QLineEdit] = []
         self._append_single_input_row()
+        self._refresh_single_input_scroll_height()
 
         self.single_scroll.setWidget(self.single_container)
         single_layout.addWidget(self.single_scroll, 1)
@@ -2309,7 +2484,8 @@ class MainWindow(QMainWindow):
 
         self.url_input = QTextEdit()
         self.url_input.setObjectName("urlInput")
-        self.url_input.setMinimumHeight(150)
+        self.url_input.setMinimumHeight(96)
+        self.url_input.setMaximumHeight(132)
         batch_layout.addLayout(batch_head)
         batch_layout.addWidget(self.url_input, 1)
 
@@ -2324,12 +2500,12 @@ class MainWindow(QMainWindow):
 
         self.start_btn = QPushButton("")
         self.start_btn.setObjectName("startBtn")
-        self.start_btn.setMinimumHeight(48)
+        self.start_btn.setMinimumHeight(44)
         self.start_btn.clicked.connect(self._start_download)
 
         self.add_more_btn = QPushButton("")
         self.add_more_btn.setObjectName("tableActionBtn")
-        self.add_more_btn.setMinimumHeight(48)
+        self.add_more_btn.setMinimumHeight(44)
         self.add_more_btn.setEnabled(False)
         self.add_more_btn.clicked.connect(self._append_tasks_while_running)
 
@@ -2345,7 +2521,7 @@ class MainWindow(QMainWindow):
         table_card = QFrame()
         table_card.setObjectName("card")
         table_layout = QVBoxLayout(table_card)
-        table_layout.setContentsMargins(18, 14, 18, 16)
+        table_layout.setContentsMargins(16, 14, 16, 14)
         table_layout.setSpacing(10)
 
         table_head = QHBoxLayout()
@@ -2447,22 +2623,25 @@ class MainWindow(QMainWindow):
         repair_card = QFrame()
         repair_card.setObjectName("card")
         repair_card_layout = QVBoxLayout(repair_card)
-        repair_card_layout.setContentsMargins(24, 24, 24, 24)
+        repair_card_layout.setContentsMargins(20, 20, 20, 20)
         repair_card_layout.setSpacing(12)
 
         self.repair_file_label = QLabel("")
         self.repair_file_label.setObjectName("fieldLabel")
-        self.repair_path_input = QLineEdit()
-        self.repair_path_input.setObjectName("pathInput")
-        self.repair_path_input.setMinimumHeight(44)
-        self.repair_path_input.setPlaceholderText("C:/video/example.mp4")
+        self.repair_hint_label = QLabel("")
+        self.repair_hint_label.setObjectName("hintText")
+        self.repair_hint_label.setWordWrap(True)
+        self.repair_path_input = QTextEdit()
+        self.repair_path_input.setObjectName("repairInput")
+        self.repair_path_input.setMinimumHeight(96)
+        self.repair_path_input.setMaximumHeight(132)
 
         repair_actions = QHBoxLayout()
         repair_actions.setSpacing(10)
         self.repair_choose_btn = QPushButton("")
         self.repair_choose_btn.setObjectName("secondaryBtn")
         self.repair_choose_btn.setMinimumHeight(42)
-        self.repair_choose_btn.clicked.connect(self._choose_repair_file)
+        self.repair_choose_btn.clicked.connect(self._choose_repair_files)
         self.repair_start_btn = QPushButton("")
         self.repair_start_btn.setObjectName("primaryBtn")
         self.repair_start_btn.setMinimumHeight(42)
@@ -2482,6 +2661,7 @@ class MainWindow(QMainWindow):
         self.repair_status_label.setWordWrap(True)
 
         repair_card_layout.addWidget(self.repair_file_label)
+        repair_card_layout.addWidget(self.repair_hint_label)
         repair_card_layout.addWidget(self.repair_path_input)
         repair_card_layout.addLayout(repair_actions)
         repair_card_layout.addWidget(self.repair_status_label)
@@ -2583,16 +2763,28 @@ class MainWindow(QMainWindow):
         self._refresh_theme_options()
         self._set_active_page("download")
 
-    def _create_nav_button(self, icon_text: str, text_key: str, page_key: str) -> QPushButton:
+    def _create_nav_button(self, icon_key: str, text_key: str, page_key: str) -> QPushButton:
         btn = QPushButton("")
         btn.setObjectName("navButton")
         btn.setCheckable(True)
         btn.setAutoExclusive(True)
-        btn.setProperty("nav_icon", icon_text)
+        btn.setProperty("icon_key", icon_key)
         btn.setProperty("text_key", text_key)
+        btn.setIconSize(QSize(18, 18))
+        btn.setMinimumHeight(44)
         btn.clicked.connect(lambda checked=False, key=page_key: self._set_active_page(key))
         self.nav_buttons[page_key] = btn
         return btn
+
+    def _nav_icon_color(self, active: bool) -> QColor:
+        if self.current_theme == "dark":
+            return QColor("#ff8da4" if active else "#f2edf0")
+        return QColor("#ff385c" if active else "#3f3f3f")
+
+    def _refresh_nav_button_icons(self) -> None:
+        for key, btn in self.nav_buttons.items():
+            icon_key = str(btn.property("icon_key") or "")
+            btn.setIcon(create_nav_icon(icon_key, self._nav_icon_color(key == self.active_page)))
 
     def _build_menu_bar(self) -> None:
         self.file_menu = self.menuBar().addMenu("")
@@ -2661,6 +2853,7 @@ class MainWindow(QMainWindow):
         self.page_stack.setCurrentIndex(index)
         for key, btn in self.nav_buttons.items():
             btn.setChecked(key == page_key)
+        self._refresh_nav_button_icons()
         self._update_page_header()
 
     def _update_page_header(self) -> None:
@@ -2679,10 +2872,10 @@ class MainWindow(QMainWindow):
         self.brand_name_label.setText(APP_DISPLAY_NAME)
         self.brand_subtitle_label.setText(APP_RELEASE_NAME)
         self.sidebar_caption_label.setText(self.t("sidebar_caption"))
-        for key, btn in self.nav_buttons.items():
-            icon_text = btn.property("nav_icon") or ""
+        for btn in self.nav_buttons.values():
             text_key = btn.property("text_key") or ""
-            btn.setText(f"{icon_text}  {self.t(str(text_key))}")
+            btn.setText(self.t(str(text_key)))
+        self._refresh_nav_button_icons()
 
         self.input_title_label.setText(self.t("input_title"))
         self.single_hint_label.setText(self.t("single_hint"))
@@ -2711,6 +2904,8 @@ class MainWindow(QMainWindow):
         self.dir_hint_label.setText(self.t("dir_hint"))
 
         self.repair_file_label.setText(self.t("repair_file_label"))
+        self.repair_hint_label.setText(self.t("repair_file_hint"))
+        self.repair_path_input.setPlaceholderText(self.t("repair_placeholder"))
         self.repair_choose_btn.setText(self.t("repair_choose"))
         self.repair_start_btn.setText(self.t("repair_start"))
         self.repair_open_btn.setText(self.t("repair_open_output"))
@@ -2898,12 +3093,12 @@ class MainWindow(QMainWindow):
                 QFrame#sidebar {
                     background: #1d1d1f;
                     border: 1px solid #2d2d31;
-                    border-radius: 24px;
+                    border-radius: 14px;
                 }
                 QFrame#sidebarBrand {
                     background: #26262a;
                     border: 1px solid #34343a;
-                    border-radius: 22px;
+                    border-radius: 14px;
                 }
                 QLabel#brandMark {
                     min-width: 44px;
@@ -2934,10 +3129,10 @@ class MainWindow(QMainWindow):
                 }
                 QPushButton#navButton {
                     border: 1px solid transparent;
-                    border-radius: 16px;
+                    border-radius: 8px;
                     background: transparent;
                     color: #f2edf0;
-                    padding: 14px 16px;
+                    padding: 12px 14px;
                     text-align: left;
                     font-size: 15px;
                     font-weight: 600;
@@ -2951,25 +3146,25 @@ class MainWindow(QMainWindow):
                     border-color: #4a3037;
                 }
                 QFrame#headerCard {
-                    border-radius: 28px;
-                    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                        stop:0 #ff385c, stop:1 #ff7f8f);
+                    border-radius: 14px;
+                    background: #202022;
+                    border: 1px solid #303036;
                 }
                 QLabel#pageBadge {
-                    color: #fff6f7;
-                    background: rgba(255, 255, 255, 0.16);
-                    border-radius: 12px;
+                    color: #ffb8c5;
+                    background: #322127;
+                    border-radius: 8px;
                     padding: 5px 10px;
                     font-size: 11px;
                     font-weight: 700;
                 }
                 QLabel#pageTitle {
                     color: #ffffff;
-                    font-size: 28px;
+                    font-size: 22px;
                     font-weight: 600;
                 }
                 QLabel#pageSubtitle {
-                    color: #fff2f4;
+                    color: #cbc2c6;
                     font-size: 14px;
                 }
                 QStackedWidget#pageStack {
@@ -2978,7 +3173,7 @@ class MainWindow(QMainWindow):
                 QFrame#card {
                     background: #202022;
                     border: 1px solid #303036;
-                    border-radius: 24px;
+                    border-radius: 14px;
                 }
                 QLabel#sectionTitle {
                     color: #ffffff;
@@ -2994,15 +3189,19 @@ class MainWindow(QMainWindow):
                     color: #cbc2c6;
                     font-size: 13px;
                 }
-                QLineEdit#pathInput, QLineEdit#urlLineInput, QTextEdit#urlInput, QSpinBox#spinBox, QComboBox#choiceSelect {
+                QLineEdit#pathInput, QLineEdit#urlLineInput, QTextEdit#urlInput, QTextEdit#repairInput, QSpinBox#spinBox, QComboBox#choiceSelect {
                     background: #2a2a2e;
                     color: #ffffff;
                     border: 1px solid #3a3a42;
-                    border-radius: 16px;
+                    border-radius: 8px;
                     padding: 10px 14px;
                     selection-background-color: #ff5d7d;
                 }
-                QTextEdit#urlInput {
+                QLineEdit#pathInput:focus, QLineEdit#urlLineInput:focus, QTextEdit#urlInput:focus, QTextEdit#repairInput:focus, QSpinBox#spinBox:focus, QComboBox#choiceSelect:focus {
+                    border: 2px solid #ff8da4;
+                    padding: 9px 13px;
+                }
+                QTextEdit#urlInput, QTextEdit#repairInput {
                     padding-top: 12px;
                     padding-bottom: 12px;
                 }
@@ -3018,14 +3217,14 @@ class MainWindow(QMainWindow):
                 }
                 QTabWidget#inputTabs::pane {
                     border: 1px solid #34343a;
-                    border-radius: 18px;
+                    border-radius: 14px;
                     top: -1px;
                 }
                 QTabWidget#inputTabs QTabBar::tab {
                     background: #2a2a2e;
                     color: #d9d0d3;
-                    border-top-left-radius: 14px;
-                    border-top-right-radius: 14px;
+                    border-top-left-radius: 8px;
+                    border-top-right-radius: 8px;
                     padding: 10px 16px;
                     margin-right: 8px;
                 }
@@ -3041,7 +3240,7 @@ class MainWindow(QMainWindow):
                     background: #ff385c;
                     color: white;
                     border: 0;
-                    border-radius: 16px;
+                    border-radius: 8px;
                     padding: 12px 22px;
                     font-size: 15px;
                     font-weight: 600;
@@ -3057,7 +3256,7 @@ class MainWindow(QMainWindow):
                     background: #2a2a2e;
                     color: #ffffff;
                     border: 1px solid #404048;
-                    border-radius: 16px;
+                    border-radius: 8px;
                     padding: 10px 16px;
                     font-size: 14px;
                     font-weight: 600;
@@ -3069,7 +3268,7 @@ class MainWindow(QMainWindow):
                     background: #2a2a2e;
                     color: #f7f2f4;
                     border: 1px solid #404048;
-                    border-radius: 12px;
+                    border-radius: 8px;
                     padding: 6px 12px;
                     font-size: 12px;
                     font-weight: 600;
@@ -3081,7 +3280,7 @@ class MainWindow(QMainWindow):
                     background: #3a2428;
                     color: #ffb8c5;
                     border: 1px solid #5a343d;
-                    border-radius: 14px;
+                    border-radius: 8px;
                     padding: 8px 14px;
                     font-size: 13px;
                     font-weight: 600;
@@ -3093,7 +3292,7 @@ class MainWindow(QMainWindow):
                     background: #2a2a2e;
                     color: #ffffff;
                     border: 1px solid #404048;
-                    border-radius: 10px;
+                    border-radius: 8px;
                     padding: 4px 10px;
                     font-size: 11px;
                     font-weight: 600;
@@ -3105,7 +3304,7 @@ class MainWindow(QMainWindow):
                     background: #1d1d20;
                     color: #ffffff;
                     border: 1px solid #303036;
-                    border-radius: 18px;
+                    border-radius: 14px;
                     gridline-color: #2a2a2f;
                     alternate-background-color: #232327;
                 }
@@ -3154,12 +3353,12 @@ class MainWindow(QMainWindow):
                 QFrame#sidebar {
                     background: #ffffff;
                     border: 1px solid #ebebeb;
-                    border-radius: 24px;
+                    border-radius: 14px;
                 }
                 QFrame#sidebarBrand {
                     background: #fff7f8;
                     border: 1px solid #ffe1e7;
-                    border-radius: 22px;
+                    border-radius: 14px;
                 }
                 QLabel#brandMark {
                     min-width: 44px;
@@ -3190,10 +3389,10 @@ class MainWindow(QMainWindow):
                 }
                 QPushButton#navButton {
                     border: 1px solid transparent;
-                    border-radius: 16px;
+                    border-radius: 8px;
                     background: transparent;
                     color: #3f3f3f;
-                    padding: 14px 16px;
+                    padding: 12px 14px;
                     text-align: left;
                     font-size: 15px;
                     font-weight: 600;
@@ -3207,25 +3406,25 @@ class MainWindow(QMainWindow):
                     border-color: #ffd6de;
                 }
                 QFrame#headerCard {
-                    border-radius: 28px;
-                    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                        stop:0 #ff385c, stop:1 #ff7f8f);
+                    border-radius: 14px;
+                    background: #ffffff;
+                    border: 1px solid #ebebeb;
                 }
                 QLabel#pageBadge {
-                    color: #fff9fa;
-                    background: rgba(255, 255, 255, 0.22);
-                    border-radius: 12px;
+                    color: #ff385c;
+                    background: #fff1f4;
+                    border-radius: 8px;
                     padding: 5px 10px;
                     font-size: 11px;
                     font-weight: 700;
                 }
                 QLabel#pageTitle {
-                    color: #ffffff;
-                    font-size: 28px;
+                    color: #222222;
+                    font-size: 22px;
                     font-weight: 600;
                 }
                 QLabel#pageSubtitle {
-                    color: #fff5f6;
+                    color: #6a6a6a;
                     font-size: 14px;
                 }
                 QStackedWidget#pageStack {
@@ -3234,7 +3433,7 @@ class MainWindow(QMainWindow):
                 QFrame#card {
                     background: #ffffff;
                     border: 1px solid #ebebeb;
-                    border-radius: 24px;
+                    border-radius: 14px;
                 }
                 QLabel#sectionTitle {
                     color: #222222;
@@ -3250,15 +3449,19 @@ class MainWindow(QMainWindow):
                     color: #6a6a6a;
                     font-size: 13px;
                 }
-                QLineEdit#pathInput, QLineEdit#urlLineInput, QTextEdit#urlInput, QSpinBox#spinBox, QComboBox#choiceSelect {
+                QLineEdit#pathInput, QLineEdit#urlLineInput, QTextEdit#urlInput, QTextEdit#repairInput, QSpinBox#spinBox, QComboBox#choiceSelect {
                     background: #ffffff;
                     color: #222222;
                     border: 1px solid #dddddd;
-                    border-radius: 16px;
+                    border-radius: 8px;
                     padding: 10px 14px;
                     selection-background-color: #ff5d7d;
                 }
-                QTextEdit#urlInput {
+                QLineEdit#pathInput:focus, QLineEdit#urlLineInput:focus, QTextEdit#urlInput:focus, QTextEdit#repairInput:focus, QSpinBox#spinBox:focus, QComboBox#choiceSelect:focus {
+                    border: 2px solid #222222;
+                    padding: 9px 13px;
+                }
+                QTextEdit#urlInput, QTextEdit#repairInput {
                     padding-top: 12px;
                     padding-bottom: 12px;
                 }
@@ -3275,14 +3478,14 @@ class MainWindow(QMainWindow):
                 }
                 QTabWidget#inputTabs::pane {
                     border: 1px solid #ebebeb;
-                    border-radius: 18px;
+                    border-radius: 14px;
                     top: -1px;
                 }
                 QTabWidget#inputTabs QTabBar::tab {
                     background: #f7f7f7;
                     color: #6a6a6a;
-                    border-top-left-radius: 14px;
-                    border-top-right-radius: 14px;
+                    border-top-left-radius: 8px;
+                    border-top-right-radius: 8px;
                     padding: 10px 16px;
                     margin-right: 8px;
                 }
@@ -3298,7 +3501,7 @@ class MainWindow(QMainWindow):
                     background: #ff385c;
                     color: white;
                     border: 0;
-                    border-radius: 16px;
+                    border-radius: 8px;
                     padding: 12px 22px;
                     font-size: 15px;
                     font-weight: 600;
@@ -3314,7 +3517,7 @@ class MainWindow(QMainWindow):
                     background: #ffffff;
                     color: #222222;
                     border: 1px solid #dddddd;
-                    border-radius: 16px;
+                    border-radius: 8px;
                     padding: 10px 16px;
                     font-size: 14px;
                     font-weight: 600;
@@ -3326,7 +3529,7 @@ class MainWindow(QMainWindow):
                     background: #ffffff;
                     color: #222222;
                     border: 1px solid #dddddd;
-                    border-radius: 12px;
+                    border-radius: 8px;
                     padding: 6px 12px;
                     font-size: 12px;
                     font-weight: 600;
@@ -3338,7 +3541,7 @@ class MainWindow(QMainWindow):
                     background: #fff1f4;
                     color: #c13515;
                     border: 1px solid #ffd6de;
-                    border-radius: 14px;
+                    border-radius: 8px;
                     padding: 8px 14px;
                     font-size: 13px;
                     font-weight: 600;
@@ -3350,7 +3553,7 @@ class MainWindow(QMainWindow):
                     background: #ffffff;
                     color: #222222;
                     border: 1px solid #dddddd;
-                    border-radius: 10px;
+                    border-radius: 8px;
                     padding: 4px 10px;
                     font-size: 11px;
                     font-weight: 600;
@@ -3362,7 +3565,7 @@ class MainWindow(QMainWindow):
                     background: #ffffff;
                     color: #222222;
                     border: 1px solid #ebebeb;
-                    border-radius: 18px;
+                    border-radius: 14px;
                     gridline-color: #f0f0f0;
                     alternate-background-color: #fcfcfc;
                 }
@@ -3390,6 +3593,7 @@ class MainWindow(QMainWindow):
 
         self.setStyleSheet(stylesheet)
         self._refresh_theme_options()
+        self._refresh_nav_button_icons()
         self._update_version_btn_text()
 
     def _toggle_theme(self) -> None:
@@ -3406,31 +3610,54 @@ class MainWindow(QMainWindow):
         if folder:
             self.output_dir_input.setText(folder)
 
-    def _choose_repair_file(self) -> bool:
-        start_dir = self.output_dir_input.text().strip() or str(default_download_dir())
-        file_path, _ = QFileDialog.getOpenFileName(
+    def _set_repair_sources(self, paths: list[Path]) -> None:
+        self.repair_path_input.setPlainText("\n".join(str(path) for path in paths))
+        self.repair_status_label.setText(self.t("repair_idle"))
+        self.repair_open_btn.setEnabled(False)
+        self.repair_output_paths = []
+        self._set_active_page("repair")
+
+    def _collect_repair_sources(self) -> list[Path]:
+        raw_text = self.repair_path_input.toPlainText().strip()
+        if not raw_text:
+            return []
+
+        sources: list[Path] = []
+        seen: set[str] = set()
+        for raw in re.split(r"[\r\n]+|\s*\|\s*", raw_text):
+            text = raw.strip().strip('"')
+            if not text:
+                continue
+            path = Path(text).expanduser().resolve()
+            key = str(path).lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            sources.append(path)
+        return sources
+
+    def _choose_repair_files(self) -> bool:
+        current_sources = self._collect_repair_sources()
+        if current_sources:
+            start_dir = str(current_sources[0].parent)
+        else:
+            start_dir = self.output_dir_input.text().strip() or str(default_download_dir())
+
+        file_paths, _ = QFileDialog.getOpenFileNames(
             self,
             self.t("dlg_select_repair_file"),
             start_dir,
             self.t("repair_filter"),
         )
-        if not file_path:
+        if not file_paths:
             return False
-        self.repair_path_input.setText(file_path)
-        self.repair_status_label.setText(self.t("repair_idle"))
-        self.repair_open_btn.setEnabled(False)
-        self.repair_output_path = None
-        self._set_active_page("repair")
+
+        self._set_repair_sources([Path(file_path).expanduser().resolve() for file_path in file_paths])
         return True
 
     def _run_repair_from_page(self) -> None:
-        source_text = self.repair_path_input.text().strip()
-        if not source_text:
-            QMessageBox.warning(self, self.t("tip"), self.t("tip_repair_missing"))
-            return
-
-        source = Path(source_text).expanduser().resolve()
-        if not source.exists():
+        sources = self._collect_repair_sources()
+        if not sources:
             QMessageBox.warning(self, self.t("tip"), self.t("tip_repair_missing"))
             return
 
@@ -3443,47 +3670,114 @@ class MainWindow(QMainWindow):
 
         self.repair_status_label.setText(self.t("detail_validating"))
         self.repair_open_btn.setEnabled(False)
-        self.repair_output_path = None
+        self.repair_output_paths = []
 
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
-            result = repair_media_file(source, options)
+            results: list[tuple[Path, MediaRepairResult]] = []
+            for current, source in enumerate(sources, start=1):
+                self.repair_status_label.setText(
+                    self.t("repair_processing", current=current, total=len(sources), file=source.name)
+                )
+                QApplication.processEvents()
+                if not source.exists():
+                    results.append(
+                        (
+                            source,
+                            MediaRepairResult(
+                                status="failed",
+                                detail=self.t("tip_repair_missing"),
+                            ),
+                        )
+                    )
+                    continue
+                results.append((source, repair_media_file(source, options)))
         finally:
             QApplication.restoreOverrideCursor()
 
-        if result.status == "noop":
-            self.repair_status_label.setText(self.t("repair_result_healthy"))
-            QMessageBox.information(self, self.t("tip"), self.t("repair_result_healthy"))
+        if len(results) == 1:
+            source, result = results[0]
+            if result.status == "noop":
+                self.repair_status_label.setText(self.t("repair_result_healthy"))
+                QMessageBox.information(self, self.t("tip"), self.t("repair_result_healthy"))
+                return
+
+            if result.status == "ok" and result.output_path:
+                self.repair_output_paths = [result.output_path]
+                self.repair_open_btn.setEnabled(True)
+                if result.method == "transcode":
+                    message = self.t("repair_result_transcode", file=str(result.output_path))
+                else:
+                    message = self.t("repair_result_remux", file=str(result.output_path))
+                self.repair_status_label.setText(message)
+                QMessageBox.information(self, self.t("tip"), message)
+                return
+
+            detail = result.detail or self.t("repair_result_failed")
+            if not source.exists() and detail == self.t("tip_repair_missing"):
+                self.repair_status_label.setText(self.t("tip_repair_missing"))
+                QMessageBox.warning(self, self.t("tip"), self.t("tip_repair_missing"))
+                return
+            self.repair_status_label.setText(self.t("repair_result_failed_detail", detail=detail))
+            QMessageBox.warning(
+                self,
+                self.t("tip"),
+                self.t("repair_result_failed_detail", detail=detail),
+            )
             return
 
-        if result.status == "ok" and result.output_path:
-            self.repair_output_path = result.output_path
-            self.repair_open_btn.setEnabled(True)
-            if result.method == "transcode":
-                message = self.t("repair_result_transcode", file=str(result.output_path))
+        success = 0
+        skipped = 0
+        failed = 0
+        details: list[str] = []
+        repaired_outputs: list[Path] = []
+        for source, result in results:
+            if result.status == "ok" and result.output_path:
+                success += 1
+                repaired_outputs.append(result.output_path)
+                method_key = "repair_result_transcode" if result.method == "transcode" else "repair_result_remux"
+                details.append(f"{source.name}: {self.t(method_key, file=str(result.output_path))}")
+            elif result.status == "noop":
+                skipped += 1
+                details.append(f"{source.name}: {self.t('repair_result_healthy')}")
             else:
-                message = self.t("repair_result_remux", file=str(result.output_path))
-            self.repair_status_label.setText(message)
-            QMessageBox.information(self, self.t("tip"), message)
-            return
+                failed += 1
+                details.append(
+                    f"{source.name}: {self.t('repair_result_failed_detail', detail=result.detail or self.t('repair_result_failed'))}"
+                )
 
-        detail = result.detail or self.t("repair_result_failed")
-        self.repair_status_label.setText(self.t("repair_result_failed_detail", detail=detail))
-        QMessageBox.warning(
-            self,
-            self.t("tip"),
-            self.t("repair_result_failed_detail", detail=detail),
+        self.repair_output_paths = repaired_outputs
+        self.repair_open_btn.setEnabled(bool(repaired_outputs))
+
+        summary = self.t("repair_result_batch", success=success, skipped=skipped, failed=failed)
+        detail_text = "\n".join(details[:10])
+        if len(details) > 10:
+            detail_text += f"\n... {len(details) - 10} more"
+        message = self.t(
+            "repair_result_batch_detail",
+            success=success,
+            skipped=skipped,
+            failed=failed,
+            details=detail_text,
         )
+        self.repair_status_label.setText(summary)
+        if failed > 0:
+            QMessageBox.warning(self, self.t("tip"), message)
+        else:
+            QMessageBox.information(self, self.t("tip"), message)
 
     def _open_repaired_output(self) -> None:
-        if not self.repair_output_path:
+        if not self.repair_output_paths:
             QMessageBox.warning(self, self.t("tip"), self.t("tip_file_missing"))
             return
-        self._open_path(self.repair_output_path, "tip_file_missing")
+        target = self.repair_output_paths[0]
+        if len(self.repair_output_paths) > 1:
+            target = target.parent
+        self._open_path(target, "tip_file_missing")
 
     def _repair_video_from_menu(self) -> None:
         self._set_active_page("repair")
-        if self._choose_repair_file():
+        if self._choose_repair_files():
             self._run_repair_from_page()
 
     def _attempt_stop_worker_for_exit(self) -> bool:
@@ -3610,6 +3904,7 @@ class MainWindow(QMainWindow):
 
         line = QLineEdit(text)
         line.setObjectName("urlLineInput")
+        line.setMinimumHeight(44)
         line.setPlaceholderText(self.t("single_placeholder"))
         line.textChanged.connect(lambda _=None, l=line: self._on_single_input_changed(l))
 
@@ -3623,6 +3918,17 @@ class MainWindow(QMainWindow):
         self.single_lines_layout.addWidget(row_wrap)
         self.single_url_inputs.append(line)
         self.single_delete_btns[line] = delete_btn
+        self._refresh_single_input_scroll_height()
+
+    def _refresh_single_input_scroll_height(self) -> None:
+        visible_rows = max(1, min(3, len(self.single_url_inputs)))
+        row_height = 44
+        height = 4 + visible_rows * row_height + (visible_rows - 1) * 8 + 4
+        self.single_scroll.setMinimumHeight(height)
+        self.single_scroll.setMaximumHeight(height)
+        self.single_scroll.setVerticalScrollBarPolicy(
+            Qt.ScrollBarAsNeeded if len(self.single_url_inputs) > 3 else Qt.ScrollBarAlwaysOff
+        )
 
     def _remove_single_input_row(self, line: QLineEdit) -> None:
         if line in self.single_url_inputs:
@@ -3634,6 +3940,7 @@ class MainWindow(QMainWindow):
             row_wrap.deleteLater()
         else:
             line.deleteLater()
+        self._refresh_single_input_scroll_height()
 
     def _on_single_input_changed(self, line: QLineEdit) -> None:
         if self.single_url_inputs and line is self.single_url_inputs[-1] and line.text().strip():
