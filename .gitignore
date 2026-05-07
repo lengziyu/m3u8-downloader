@@ -5,3 +5,6 @@ downloads/
 build/
 dist/
 *.spec
+.build-venv/
+download_history.sqlite3
+redownload_candidates.csv

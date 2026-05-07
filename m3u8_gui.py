@@ -8,6 +8,7 @@ import os
 import queue
 import re
 import shutil
+import sqlite3
 import ssl
 import subprocess
 import sys
@@ -31,14 +32,16 @@ from PySide6.QtCore import (
     QRectF,
     QSize,
     QStandardPaths,
+    QTimer,
     Qt,
     QThread,
     QUrl,
     Signal,
     Slot,
 )
-from PySide6.QtGui import QAction, QBrush, QColor, QDesktopServices, QIcon, QPainter, QPainterPath, QPen, QPixmap
+from PySide6.QtGui import QAction, QBrush, QColor, QCursor, QDesktopServices, QIcon, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QApplication,
     QComboBox,
     QFileDialog,
@@ -56,10 +59,13 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSpinBox,
     QStackedWidget,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
     QTabWidget,
     QTableWidget,
     QTableWidgetItem,
     QTextEdit,
+    QToolTip,
     QVBoxLayout,
     QWidget,
 )
@@ -172,6 +178,7 @@ I18N = {
         "choose_dir": "选择目录",
         "jobs": "并发任务",
         "retries": "失败重试",
+        "timeout": "超时秒数",
         "title_sub": "轻巧的 m3u8 视频下载与修复客户端",
         "input_title": "M3U8 链接输入",
         "single_hint": "逐条输入：每一行只放一个链接，填满后会自动补出下一行。",
@@ -274,7 +281,7 @@ I18N = {
         "page_repair_title": "视频修复",
         "page_repair_sub": "对已下载但元数据异常的 MP4 进行重封装或转码修复。",
         "page_settings_title": "偏好设置",
-        "page_settings_sub": "主题、语言、并发和重试都集中放在这里。",
+        "page_settings_sub": "主题、语言、并发、重试和超时都集中放在这里。",
         "dir_hint": "当前目录会用于下载输出，也会作为修复视频的默认选择位置。",
         "repair_file_label": "待修复文件",
         "repair_file_hint": "支持多选，也支持每行一个本地视频路径；修复结果会另存，不覆盖原文件。",
@@ -327,6 +334,7 @@ I18N = {
         "choose_dir": "Choose Folder",
         "jobs": "Parallel Jobs",
         "retries": "Retries",
+        "timeout": "Timeout (sec)",
         "title_sub": "A compact m3u8 downloader and repair client",
         "input_title": "M3U8 Input",
         "single_hint": "Single mode: one link per row. A new row appears automatically when the last one is filled.",
@@ -429,7 +437,7 @@ I18N = {
         "page_repair_title": "Video Repair",
         "page_repair_sub": "Repair downloaded MP4 files with broken metadata through remux or transcode.",
         "page_settings_title": "Preferences",
-        "page_settings_sub": "Language, theme, concurrency, and retries live here.",
+        "page_settings_sub": "Language, theme, concurrency, retries, and timeout live here.",
         "dir_hint": "This folder is used for downloads and also becomes the default starting location for repair.",
         "repair_file_label": "Source File",
         "repair_file_hint": "Supports multi-select or one local video path per line. Repaired files are saved separately.",
@@ -482,6 +490,7 @@ I18N = {
         "choose_dir": "フォルダーを選択",
         "jobs": "同時実行数",
         "retries": "再試行回数",
+        "timeout": "タイムアウト秒数",
         "title_sub": "軽量な m3u8 ダウンロード・修復クライアント",
         "input_title": "M3U8 入力",
         "single_hint": "単体入力: 1 行に 1 リンク。最後の行が埋まると次の行を自動追加します。",
@@ -584,7 +593,7 @@ I18N = {
         "page_repair_title": "動画修復",
         "page_repair_sub": "メタデータが壊れた MP4 を再 mux または再エンコードで修復します。",
         "page_settings_title": "環境設定",
-        "page_settings_sub": "言語、テーマ、同時実行数、再試行回数をここで調整できます。",
+        "page_settings_sub": "言語、テーマ、同時実行数、再試行回数、タイムアウトをここで調整できます。",
         "dir_hint": "このフォルダーはダウンロード保存先であり、動画修復の初期選択場所にも使われます。",
         "repair_file_label": "修復対象ファイル",
         "repair_file_hint": "複数選択、または 1 行に 1 つずつローカル動画パスを貼り付けられます。結果は別名保存されます。",
@@ -632,10 +641,287 @@ I18N = {
     },
 }
 
+for _lang, _extra in {
+    "zh": {
+        "nav_history": "下载历史",
+        "page_history_title": "下载历史",
+        "page_history_sub": "这里会长期保存番号、名称、链接和输出文件路径，方便排查坏文件并批量重新下载。",
+        "page_settings_sub": "语言、主题、并发、重试、超时都可以在这里调整，下载历史也会保存在软件目录里。",
+        "history_filters_title": "历史筛选",
+        "history_actions_title": "历史操作",
+        "history_code": "番号",
+        "history_name": "名称",
+        "history_url": "链接",
+        "history_status": "状态",
+        "history_search": "查询",
+        "history_reset": "重置",
+        "history_scan": "检查当前结果",
+        "history_redownload_selected": "重下选中项",
+        "history_redownload_page": "重下本页",
+        "history_delete_selected": "删除选中历史",
+        "history_page_prev": "上一页",
+        "history_page_next": "下一页",
+        "history_page_info": "第 {current}/{total} 页",
+        "history_summary_empty": "暂无历史记录。",
+        "history_summary_page": "共 {total} 条，当前第 {current}/{total_pages} 页。",
+        "history_scan_running": "正在检查当前筛选结果，共 {total} 条……",
+        "history_scan_progress": "正在检查 {current}/{total}: {name}",
+        "history_scan_done": "检查完成：正常 {ok}，损坏 {broken}，文件缺失 {missing}。",
+        "history_store_failed": "历史存档初始化失败：{err}",
+        "history_no_selection": "请先选中历史记录。",
+        "history_confirm_delete": "确认删除历史",
+        "history_confirm_delete_selected": "仅删除选中的历史记录，不会删除磁盘里的视频文件，是否继续？",
+        "history_redownload_added": "已加入重下队列：{added} 条。",
+        "history_redownload_none": "没有可加入的历史记录，可能已经在当前任务里，或链接无效。",
+        "history_status_all": "全部",
+        "history_status_unknown": "未检查",
+        "history_status_ok": "正常",
+        "history_status_broken": "损坏",
+        "history_status_missing": "文件缺失",
+        "history_status_issue": "仅看异常",
+        "history_col_id": "ID",
+        "history_col_code": "番号",
+        "history_col_name": "名称",
+        "history_col_status": "状态",
+        "history_col_path": "文件路径",
+        "history_col_url": "链接",
+        "history_col_updated": "更新时间",
+    },
+    "en": {
+        "nav_history": "History",
+        "page_history_title": "Download History",
+        "page_history_sub": "Save code, name, link, and output path locally so broken videos can be found and queued again.",
+        "history_filters_title": "Filters",
+        "history_actions_title": "Actions",
+        "history_code": "Code",
+        "history_name": "Name",
+        "history_url": "Link",
+        "history_status": "Status",
+        "history_search": "Search",
+        "history_reset": "Reset",
+        "history_scan": "Check Results",
+        "history_redownload_selected": "Redownload Selected",
+        "history_redownload_page": "Redownload Page",
+        "history_delete_selected": "Delete Selected History",
+        "history_page_prev": "Prev",
+        "history_page_next": "Next",
+        "history_page_info": "Page {current}/{total}",
+        "history_summary_empty": "No history records yet.",
+        "history_summary_page": "{total} records, page {current}/{total_pages}.",
+        "history_scan_running": "Checking {total} filtered records...",
+        "history_scan_progress": "Checking {current}/{total}: {name}",
+        "history_scan_done": "Check complete: ok {ok}, broken {broken}, missing {missing}.",
+        "history_store_failed": "Failed to initialize history store: {err}",
+        "history_no_selection": "Select at least one history row first.",
+        "history_confirm_delete": "Delete History",
+        "history_confirm_delete_selected": "Only the selected history rows will be removed. Video files on disk will stay untouched. Continue?",
+        "history_redownload_added": "{added} record(s) added back to the download queue.",
+        "history_redownload_none": "No history rows could be queued. They may already exist in the current task list, or the links are invalid.",
+        "history_status_all": "All",
+        "history_status_unknown": "Unknown",
+        "history_status_ok": "OK",
+        "history_status_broken": "Broken",
+        "history_status_missing": "Missing",
+        "history_status_issue": "Issues Only",
+        "history_col_id": "ID",
+        "history_col_code": "Code",
+        "history_col_name": "Name",
+        "history_col_status": "Status",
+        "history_col_path": "File Path",
+        "history_col_url": "Link",
+        "history_col_updated": "Updated",
+    },
+    "ja": {
+        "nav_history": "履歴",
+        "page_history_title": "ダウンロード履歴",
+        "page_history_sub": "番号、名前、リンク、保存先をソフト内に残して、壊れた動画の再取得をやりやすくします。",
+        "history_filters_title": "絞り込み",
+        "history_actions_title": "操作",
+        "history_code": "番号",
+        "history_name": "名称",
+        "history_url": "リンク",
+        "history_status": "状態",
+        "history_search": "検索",
+        "history_reset": "リセット",
+        "history_scan": "現在結果を検査",
+        "history_redownload_selected": "選択項目を再取得",
+        "history_redownload_page": "このページを再取得",
+        "history_delete_selected": "選択履歴を削除",
+        "history_page_prev": "前へ",
+        "history_page_next": "次へ",
+        "history_page_info": "{current}/{total} ページ",
+        "history_summary_empty": "履歴はまだありません。",
+        "history_summary_page": "全 {total} 件、{current}/{total_pages} ページ目です。",
+        "history_scan_running": "現在の絞り込み結果 {total} 件を検査中...",
+        "history_scan_progress": "{current}/{total} を検査中: {name}",
+        "history_scan_done": "検査完了: 正常 {ok}、破損 {broken}、ファイル欠失 {missing}。",
+        "history_store_failed": "履歴ストアの初期化に失敗しました: {err}",
+        "history_no_selection": "先に履歴行を選択してください。",
+        "history_confirm_delete": "履歴削除の確認",
+        "history_confirm_delete_selected": "選択した履歴だけを削除します。ディスク上の動画ファイルは削除しません。続行しますか？",
+        "history_redownload_added": "{added} 件を再取得キューへ追加しました。",
+        "history_redownload_none": "追加できる履歴がありません。すでに現在のタスクにあるか、リンクが無効です。",
+        "history_status_all": "すべて",
+        "history_status_unknown": "未検査",
+        "history_status_ok": "正常",
+        "history_status_broken": "破損",
+        "history_status_missing": "欠失",
+        "history_status_issue": "異常のみ",
+        "history_col_id": "ID",
+        "history_col_code": "番号",
+        "history_col_name": "名称",
+        "history_col_status": "状態",
+        "history_col_path": "保存先",
+        "history_col_url": "リンク",
+        "history_col_updated": "更新日時",
+    },
+}.items():
+    I18N.setdefault(_lang, {}).update(_extra)
+
+for _lang, _extra in {
+    "zh": {
+        "theme_light_tip": "切换到浅色主题",
+        "theme_dark_tip": "切换到深色主题",
+        "tip_copied_output": "已复制输出文件路径",
+    },
+    "en": {
+        "theme_light_tip": "Switch to the light theme",
+        "theme_dark_tip": "Switch to the dark theme",
+        "tip_copied_output": "Output path copied",
+    },
+    "ja": {
+        "theme_light_tip": "ライトテーマに切り替え",
+        "theme_dark_tip": "ダークテーマに切り替え",
+        "tip_copied_output": "出力先パスをコピーしました",
+    },
+}.items():
+    I18N.setdefault(_lang, {}).update(_extra)
+
 
 def sanitize_filename(name: str) -> str:
     cleaned = re.sub(r"[\\/:*?\"<>|\x00-\x1f]+", "_", name).strip().strip(".")
     return cleaned or "video"
+
+
+VIDEO_CODE_RE = re.compile(r"([A-Za-z]{2,8}-\d{2,6})", re.IGNORECASE)
+
+
+def app_storage_dir() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
+def history_db_path() -> Path:
+    return app_storage_dir() / "download_history.sqlite3"
+
+
+def extract_video_code(text: str) -> str:
+    source = Path(text or "").stem
+    match = VIDEO_CODE_RE.search(source)
+    return match.group(1).upper() if match else ""
+
+
+@dataclass(frozen=True)
+class HistoryEntry:
+    id: int
+    code: str
+    name: str
+    url: str
+    output_path: str
+    created_at: str
+    updated_at: str
+
+
+class DownloadHistoryStore:
+    def __init__(self, db_path: Path):
+        self.db_path = db_path
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._init_schema()
+
+    def _connect(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    def _init_schema(self) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS download_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    code TEXT NOT NULL DEFAULT '',
+                    name TEXT NOT NULL,
+                    url TEXT NOT NULL UNIQUE,
+                    output_path TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_download_history_code ON download_history(code)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_download_history_updated ON download_history(updated_at DESC, id DESC)"
+            )
+
+    def upsert_entry(self, code: str, name: str, url: str, output_path: str) -> None:
+        now = dt.datetime.now().isoformat(timespec="seconds")
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO download_history (code, name, url, output_path, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(url) DO UPDATE SET
+                    code = excluded.code,
+                    name = excluded.name,
+                    output_path = excluded.output_path,
+                    updated_at = excluded.updated_at
+                """,
+                (code, name, url, output_path, now, now),
+            )
+
+    def query_entries(self, code_filter: str = "", name_filter: str = "", url_filter: str = "") -> list[HistoryEntry]:
+        clauses: list[str] = []
+        params: list[str] = []
+        if code_filter.strip():
+            clauses.append("LOWER(code) LIKE ?")
+            params.append(f"%{code_filter.strip().lower()}%")
+        if name_filter.strip():
+            clauses.append("LOWER(name) LIKE ?")
+            params.append(f"%{name_filter.strip().lower()}%")
+        if url_filter.strip():
+            clauses.append("LOWER(url) LIKE ?")
+            params.append(f"%{url_filter.strip().lower()}%")
+
+        where_clause = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        sql = (
+            "SELECT id, code, name, url, output_path, created_at, updated_at "
+            f"FROM download_history {where_clause} "
+            "ORDER BY updated_at DESC, id DESC"
+        )
+        with self._connect() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return [
+            HistoryEntry(
+                id=int(row["id"]),
+                code=str(row["code"] or ""),
+                name=str(row["name"] or ""),
+                url=str(row["url"] or ""),
+                output_path=str(row["output_path"] or ""),
+                created_at=str(row["created_at"] or ""),
+                updated_at=str(row["updated_at"] or ""),
+            )
+            for row in rows
+        ]
+
+    def delete_entries(self, entry_ids: list[int]) -> None:
+        if not entry_ids:
+            return
+        placeholders = ",".join("?" for _ in entry_ids)
+        with self._connect() as conn:
+            conn.execute(f"DELETE FROM download_history WHERE id IN ({placeholders})", entry_ids)
 
 
 def is_probable_url(value: str) -> bool:
@@ -746,6 +1032,14 @@ def create_app_icon(size: int = 256) -> QIcon:
     return QIcon(pix)
 
 
+def load_brand_logo_pixmap(size: int = 56) -> QPixmap:
+    logo_path = Path(__file__).resolve().parent / "assets" / "app_icon.png"
+    pix = QPixmap(str(logo_path)) if logo_path.exists() else QPixmap()
+    if pix.isNull():
+        pix = create_app_icon(size).pixmap(size, size)
+    return pix.scaled(size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+
+
 def create_nav_icon(kind: str, color: QColor, size: int = 18) -> QIcon:
     pix = QPixmap(size, size)
     pix.fill(Qt.transparent)
@@ -786,6 +1080,11 @@ def create_nav_icon(kind: str, color: QColor, size: int = 18) -> QIcon:
         painter.drawLine(int(size * 0.64), int(size * 0.32), int(size * 0.80), int(size * 0.32))
         painter.drawLine(int(size * 0.78), int(size * 0.14), int(size * 0.78), int(size * 0.26))
         painter.drawLine(int(size * 0.72), int(size * 0.20), int(size * 0.84), int(size * 0.20))
+    elif kind == "history":
+        painter.drawRoundedRect(QRectF(size * 0.18, size * 0.20, size * 0.64, size * 0.58), 3, 3)
+        painter.drawLine(int(size * 0.30), int(size * 0.38), int(size * 0.70), int(size * 0.38))
+        painter.drawLine(int(size * 0.30), int(size * 0.50), int(size * 0.70), int(size * 0.50))
+        painter.drawLine(int(size * 0.30), int(size * 0.62), int(size * 0.58), int(size * 0.62))
     else:
         painter.drawEllipse(QRectF(size * 0.30, size * 0.30, size * 0.40, size * 0.40))
         for angle in range(0, 360, 45):
@@ -794,6 +1093,36 @@ def create_nav_icon(kind: str, color: QColor, size: int = 18) -> QIcon:
             painter.rotate(angle)
             painter.drawLine(int(size * 0.0), int(-size * 0.34), int(size * 0.0), int(-size * 0.20))
             painter.restore()
+
+    painter.end()
+    return QIcon(pix)
+
+
+def create_theme_icon(theme: str, color: QColor, size: int = 18) -> QIcon:
+    pix = QPixmap(size, size)
+    pix.fill(Qt.transparent)
+    painter = QPainter(pix)
+    painter.setRenderHint(QPainter.Antialiasing)
+    pen = QPen(color, max(1.5, size / 11), Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+    painter.setPen(pen)
+    painter.setBrush(Qt.NoBrush)
+
+    if theme == "light":
+        painter.drawEllipse(QRectF(size * 0.28, size * 0.28, size * 0.44, size * 0.44))
+        for angle in range(0, 360, 45):
+            painter.save()
+            painter.translate(size * 0.5, size * 0.5)
+            painter.rotate(angle)
+            painter.drawLine(int(size * 0.0), int(-size * 0.42), int(size * 0.0), int(-size * 0.30))
+            painter.restore()
+    else:
+        moon = QPainterPath()
+        moon.addEllipse(QRectF(size * 0.24, size * 0.18, size * 0.52, size * 0.60))
+        cut = QPainterPath()
+        cut.addEllipse(QRectF(size * 0.42, size * 0.14, size * 0.42, size * 0.58))
+        moon = moon.subtracted(cut)
+        painter.fillPath(moon, color)
+        painter.drawPath(moon)
 
     painter.end()
     return QIcon(pix)
@@ -947,6 +1276,7 @@ def _binary_is_usable(path: str) -> bool:
             [path, "-version"],
             capture_output=True,
             text=True,
+            errors="replace",
             timeout=6,
             **subprocess_no_window_kwargs(),
         )
@@ -1038,6 +1368,7 @@ def ffmpeg_supports_option(binary_path: str | None, option_name: str) -> bool:
             [binary_path, "-hide_banner", "-h", "full"],
             capture_output=True,
             text=True,
+            errors="replace",
             timeout=8,
             **subprocess_no_window_kwargs(),
         )
@@ -1157,6 +1488,7 @@ def run_ffmpeg_command(cmd: list[str]) -> tuple[bool, str]:
         cmd,
         capture_output=True,
         text=True,
+        errors="replace",
         **subprocess_no_window_kwargs(),
     )
     if proc.returncode == 0:
@@ -1168,6 +1500,10 @@ def normalize_repair_error_detail(detail: str | None) -> str:
     if not detail:
         return "ffmpeg 无法读取这个视频文件，可能文件已损坏或格式并非有效 MP4。"
     lowered_detail = detail.lower()
+    if "__mp4_mdat_missing_moov__" in lowered_detail:
+        return "检测到该文件只剩 MP4 的 ftyp/mdat 结构，缺少 moov 索引。这通常表示下载中断或文件已被截断，建议回到原始 m3u8 重新下载。"
+    if "__mp4_mdat_raw_video_failed__" in lowered_detail:
+        return "检测到该文件缺少 moov，已尝试把 mdat 当作原始视频流抢救，但没有得到可播放的结果。文件很可能已经严重损坏，建议重新下载。"
     if "__no_recoverable_stream__" in lowered_detail:
         return "未探测到可恢复的音视频流，当前无法自动修复，建议回到原始 m3u8 重新下载。"
     if "error opening input" in lowered_detail or "invalid data found when processing input" in lowered_detail:
@@ -1204,6 +1540,7 @@ def probe_media_format_name(path: Path, options: DownloadOptions, forced_format:
             cmd,
             capture_output=True,
             text=True,
+            errors="replace",
             timeout=20,
             **subprocess_no_window_kwargs(),
         )
@@ -1213,6 +1550,113 @@ def probe_media_format_name(path: Path, options: DownloadOptions, forced_format:
         return None
     value = (proc.stdout or "").strip().splitlines()
     return value[0].strip() if value else None
+
+
+def inspect_mp4_payload_layout(path: Path) -> dict[str, int | bool | None] | None:
+    try:
+        size = path.stat().st_size
+        with path.open("rb") as fh:
+            head = fh.read(256 * 1024)
+            if not head:
+                return None
+            tail = b""
+            if size > 1024 * 1024:
+                fh.seek(max(0, size - 1024 * 1024))
+                tail = fh.read(1024 * 1024)
+    except OSError:
+        return None
+
+    offset = 0
+    has_ftyp = False
+    has_moov = False
+    has_mdat = False
+    mdat_payload_offset: int | None = None
+    limit = min(len(head), 256 * 1024)
+    while offset + 8 <= limit:
+        box_size = int.from_bytes(head[offset : offset + 4], "big")
+        box_type = head[offset + 4 : offset + 8]
+        header_size = 8
+        if box_size == 1:
+            if offset + 16 > limit:
+                break
+            box_size = int.from_bytes(head[offset + 8 : offset + 16], "big")
+            header_size = 16
+        elif box_size == 0:
+            box_size = size - offset
+        if box_size < header_size:
+            break
+
+        if box_type == b"ftyp":
+            has_ftyp = True
+        elif box_type == b"moov":
+            has_moov = True
+        elif box_type == b"mdat":
+            has_mdat = True
+            mdat_payload_offset = offset + header_size
+            if box_size == size - offset:
+                break
+
+        if box_size <= 0:
+            break
+        offset += box_size
+
+    if not has_moov and tail:
+        has_moov = b"moov" in tail
+
+    if not has_ftyp and not has_moov and not has_mdat:
+        return None
+    return {
+        "has_ftyp": has_ftyp,
+        "has_moov": has_moov,
+        "has_mdat": has_mdat,
+        "mdat_payload_offset": mdat_payload_offset,
+    }
+
+
+def probe_raw_video_stream_format(
+    path: Path,
+    options: DownloadOptions,
+    skip_initial_bytes: int,
+) -> str | None:
+    if not options.ffprobe:
+        return None
+    for forced_format in ("h264", "hevc"):
+        cmd = [
+            options.ffprobe,
+            "-hide_banner",
+            "-v",
+            "error",
+            "-skip_initial_bytes",
+            str(skip_initial_bytes),
+            "-f",
+            forced_format,
+            "-show_entries",
+            "stream=codec_type,width,height",
+            "-of",
+            "json",
+            str(path),
+        ]
+        try:
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                errors="replace",
+                timeout=20,
+                **subprocess_no_window_kwargs(),
+            )
+        except Exception:
+            continue
+        if proc.returncode != 0:
+            continue
+        try:
+            payload = json.loads(proc.stdout or "{}")
+        except json.JSONDecodeError:
+            continue
+        for stream in payload.get("streams") or []:
+            if stream.get("codec_type") == "video":
+                return forced_format
+    return None
 
 
 def build_sidecar_output_path(path: Path, tag: str) -> Path:
@@ -1262,6 +1706,7 @@ def probe_duration_seconds(task: DownloadTask, options: DownloadOptions) -> floa
             cmd,
             capture_output=True,
             text=True,
+            errors="replace",
             timeout=20,
             **subprocess_no_window_kwargs(),
         )
@@ -1313,6 +1758,7 @@ def run_ffmpeg_with_progress(
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
+        errors="replace",
         bufsize=1,
         **subprocess_no_window_kwargs(),
     )
@@ -1412,6 +1858,7 @@ def validate_output_media(path: Path, options: DownloadOptions) -> tuple[bool, s
             probe_cmd,
             capture_output=True,
             text=True,
+            errors="replace",
             **subprocess_no_window_kwargs(),
         )
         if proc.returncode != 0:
@@ -1453,6 +1900,7 @@ def validate_output_media(path: Path, options: DownloadOptions) -> tuple[bool, s
         test_cmd,
         capture_output=True,
         text=True,
+        errors="replace",
         **subprocess_no_window_kwargs(),
     )
     if test_proc.returncode != 0:
@@ -1470,6 +1918,7 @@ def repair_media_file(
     on_stage: Callable[[str], None] | None = None,
 ) -> MediaRepairResult:
     source = source_path.expanduser().resolve()
+    mp4_layout = inspect_mp4_payload_layout(source)
 
     def emit_stage(stage: str) -> None:
         if on_stage:
@@ -1569,6 +2018,92 @@ def repair_media_file(
             return finish_success("transcode")
         err2 = repaired_reason2 or "invalid transcoded output"
 
+    raw_format: str | None = None
+    raw_err: str | None = None
+    raw_err2: str | None = None
+    missing_moov_mdat = bool(
+        mp4_layout
+        and mp4_layout.get("has_ftyp")
+        and mp4_layout.get("has_mdat")
+        and not mp4_layout.get("has_moov")
+        and isinstance(mp4_layout.get("mdat_payload_offset"), int)
+    )
+    if missing_moov_mdat:
+        skip_initial_bytes = int(mp4_layout["mdat_payload_offset"])
+        raw_format = probe_raw_video_stream_format(source, options, skip_initial_bytes)
+        if raw_format:
+            emit_stage("raw_remux")
+            raw_remux_cmd = [
+                options.ffmpeg,
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-skip_initial_bytes",
+                str(skip_initial_bytes),
+                *repair_input_args,
+                "-f",
+                raw_format,
+                "-i",
+                str(source),
+                "-map",
+                "0:v:0?",
+                "-an",
+                "-c:v",
+                "copy",
+                "-movflags",
+                "+faststart",
+                str(working_output),
+            ]
+            ok_raw, raw_err = run_ffmpeg_command(raw_remux_cmd)
+            if ok_raw:
+                emit_stage("verify")
+                repaired_ok_raw, repaired_reason_raw = validate_output_media(working_output, options)
+                if repaired_ok_raw:
+                    return finish_success("remux")
+                raw_err = repaired_reason_raw or "invalid raw video remux output"
+                cleanup_file(working_output)
+
+            emit_stage("raw_transcode")
+            raw_transcode_cmd = [
+                options.ffmpeg,
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-skip_initial_bytes",
+                str(skip_initial_bytes),
+                *repair_input_args,
+                "-f",
+                raw_format,
+                "-i",
+                str(source),
+                "-map",
+                "0:v:0?",
+                "-an",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "veryfast",
+                "-crf",
+                "23",
+                "-pix_fmt",
+                "yuv420p",
+                "-movflags",
+                "+faststart",
+                str(working_output),
+            ]
+            ok_raw2, raw_err2 = run_ffmpeg_command(raw_transcode_cmd)
+            if ok_raw2:
+                emit_stage("verify")
+                repaired_ok_raw2, repaired_reason_raw2 = validate_output_media(working_output, options)
+                if repaired_ok_raw2:
+                    return finish_success("transcode")
+                raw_err2 = repaired_reason_raw2 or "invalid raw video transcode output"
+                cleanup_file(working_output)
+        else:
+            raw_err = "__MP4_MDAT_MISSING_MOOV__"
+
     emit_stage("ts_probe")
     ts_format = probe_media_format_name(source, options, forced_format="mpegts")
     ts_err: str | None = None
@@ -1650,6 +2185,8 @@ def repair_media_file(
 
     cleanup_file(working_output)
     detail_parts = [media_reason, err or "remux failed", err2 or "transcode failed"]
+    if raw_format:
+        detail_parts.extend([raw_err or "raw video remux failed", raw_err2 or "raw video transcode failed"])
     if ts_format == "mpegts":
         detail_parts.extend([ts_err or "ts remux failed", ts_err2 or "ts transcode failed"])
         if any("Output file does not contain any stream" in str(part) for part in detail_parts if part):
@@ -1657,6 +2194,10 @@ def repair_media_file(
             return MediaRepairResult(status="failed", detail=detail)
         if any("Output file does not contain any stream" in str(part) for part in detail_parts if part):
             detail_parts = ["检测到该文件更像 TS 残片，但里面没有可恢复的音视频流，建议重新下载原始 m3u8 后再导出。"]
+    if missing_moov_mdat and not raw_format:
+        detail_parts.append("__MP4_MDAT_MISSING_MOOV__")
+    elif missing_moov_mdat:
+        detail_parts.append("__MP4_MDAT_RAW_VIDEO_FAILED__")
     detail = normalize_repair_error_detail("; ".join(part for part in detail_parts if part))
     return MediaRepairResult(status="failed", detail=detail)
 
@@ -2114,6 +2655,158 @@ class RepairWorker(QObject):
         self.finished.emit(results)
 
 
+class HistoryScanWorker(QObject):
+    progress = Signal(int, int, str)
+    finished = Signal(object)
+
+    def __init__(self, entries: list[HistoryEntry], options: DownloadOptions):
+        super().__init__()
+        self.entries = entries
+        self.options = options
+
+    @Slot()
+    def run(self) -> None:
+        results: list[tuple[int, str, str]] = []
+        total = len(self.entries)
+        for current, entry in enumerate(self.entries, start=1):
+            self.progress.emit(current, total, entry.name)
+            target = Path(entry.output_path)
+            if not target.exists():
+                results.append((entry.id, "missing", "输出文件不存在"))
+                continue
+            healthy, detail = validate_output_media(target, self.options)
+            results.append((entry.id, "ok" if healthy else "broken", detail or ""))
+        self.finished.emit(results)
+
+
+class HoverAwareTableWidget(QTableWidget):
+    hoveredRowChanged = Signal(int, int)
+
+    def __init__(self, rows: int, columns: int, parent: QWidget | None = None):
+        super().__init__(rows, columns, parent)
+        self._hovered_row = -1
+        self.setMouseTracking(True)
+        self.viewport().setMouseTracking(True)
+
+    def hovered_row(self) -> int:
+        return self._hovered_row
+
+    def _set_hovered_row(self, row: int) -> None:
+        if row == self._hovered_row:
+            return
+        previous = self._hovered_row
+        self._hovered_row = row
+        self.viewport().update()
+        self.hoveredRowChanged.emit(previous, row)
+
+    def mouseMoveEvent(self, event) -> None:
+        index = self.indexAt(event.pos())
+        self._set_hovered_row(index.row() if index.isValid() else -1)
+        super().mouseMoveEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        self._set_hovered_row(-1)
+        super().leaveEvent(event)
+
+
+class TaskRowHoverDelegate(QStyledItemDelegate):
+    def __init__(self, table: HoverAwareTableWidget):
+        super().__init__(table)
+        self._table = table
+
+    def paint(self, painter: QPainter, option: QStyleOptionViewItem, index) -> None:
+        if index.row() == self._table.hovered_row():
+            shifted = QStyleOptionViewItem(option)
+            shifted.rect = option.rect.adjusted(4, 0, 0, 0)
+            super().paint(painter, shifted, index)
+            return
+        super().paint(painter, option, index)
+
+
+class AnimatedProgressBar(QProgressBar):
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self._busy = False
+        self._phase = 0.0
+        self._timer = QTimer(self)
+        self._timer.setInterval(45)
+        self._timer.timeout.connect(self._advance_phase)
+        self.setTextVisible(True)
+
+    def set_busy(self, busy: bool) -> None:
+        self._busy = busy
+        if busy and not self._timer.isActive():
+            self._timer.start()
+        elif not busy and self.maximum() != 0 and (self.value() <= 0 or self.value() >= 100):
+            self._timer.stop()
+        self.update()
+
+    def _advance_phase(self) -> None:
+        self._phase = (self._phase + 0.045) % 1.4
+        self.update()
+
+    def _theme_is_dark(self) -> bool:
+        return self.palette().window().color().lightness() < 128
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        radius = rect.height() / 2.0
+        dark = self._theme_is_dark()
+        track = QColor("#2a2a2e") if dark else QColor("#f3f5f7")
+        border = QColor("#3a3a42") if dark else QColor("#d8dde3")
+        text_color = QColor("#ffffff") if dark else QColor("#344054")
+
+        painter.setPen(QPen(border, 1))
+        painter.setBrush(track)
+        painter.drawRoundedRect(rect, radius, radius)
+
+        if self.maximum() == 0:
+            band_width = rect.width() * 0.28
+            start = rect.left() + (rect.width() + band_width) * self._phase - band_width
+            moving = QRectF(start, rect.top(), band_width, rect.height())
+            gradient = QLinearGradient(moving.topLeft(), moving.topRight())
+            gradient.setColorAt(0.0, QColor("#ff5c7a"))
+            gradient.setColorAt(0.5, QColor("#ff91a8"))
+            gradient.setColorAt(1.0, QColor("#ffd3dc"))
+            clip = QPainterPath()
+            clip.addRoundedRect(rect.adjusted(1, 1, -1, -1), max(1.0, radius - 1), max(1.0, radius - 1))
+            painter.save()
+            painter.setClipPath(clip)
+            painter.fillRect(moving, gradient)
+            painter.restore()
+        elif self.maximum() > self.minimum():
+            progress = (self.value() - self.minimum()) / (self.maximum() - self.minimum())
+            progress = max(0.0, min(1.0, progress))
+            fill_width = max(rect.height(), rect.width() * progress)
+            filled = QRectF(rect.left(), rect.top(), fill_width, rect.height())
+            gradient = QLinearGradient(filled.topLeft(), filled.topRight())
+            gradient.setColorAt(0.0, QColor("#ff4d73"))
+            gradient.setColorAt(0.55, QColor("#ff6f8d"))
+            gradient.setColorAt(1.0, QColor("#ffafbf"))
+            clip = QPainterPath()
+            clip.addRoundedRect(rect.adjusted(1, 1, -1, -1), max(1.0, radius - 1), max(1.0, radius - 1))
+            painter.save()
+            painter.setClipPath(clip)
+            painter.fillRect(filled, gradient)
+            if self._busy and 0 < self.value() < 100:
+                shimmer_width = max(rect.width() * 0.18, 22.0)
+                shimmer_left = rect.left() + (rect.width() + shimmer_width) * self._phase - shimmer_width
+                shimmer = QRectF(shimmer_left, rect.top(), shimmer_width, rect.height())
+                shimmer_gradient = QLinearGradient(shimmer.topLeft(), shimmer.topRight())
+                shimmer_gradient.setColorAt(0.0, QColor(255, 255, 255, 0))
+                shimmer_gradient.setColorAt(0.5, QColor(255, 255, 255, 78))
+                shimmer_gradient.setColorAt(1.0, QColor(255, 255, 255, 0))
+                painter.fillRect(shimmer, shimmer_gradient)
+            painter.restore()
+
+        if self.isTextVisible():
+            painter.setPen(text_color)
+            painter.drawText(self.rect(), Qt.AlignCenter, self.text())
+
+
 @dataclass
 class LocalApiRequest:
     path: str
@@ -2259,6 +2952,8 @@ class MainWindow(QMainWindow):
         self.repair_worker: RepairWorker | None = None
         self.row_by_index: dict[int, int] = {}
         self.progress_by_index: dict[int, QProgressBar] = {}
+        self.progress_wrap_by_index: dict[int, QWidget] = {}
+        self.action_wrap_by_index: dict[int, QWidget] = {}
         self.pause_btn_by_index: dict[int, QPushButton] = {}
         self.play_btn_by_index: dict[int, QPushButton] = {}
         self.delete_btn_by_index: dict[int, QPushButton] = {}
@@ -2277,6 +2972,21 @@ class MainWindow(QMainWindow):
         self.repair_output_paths: list[Path] = []
         self.repair_active_sources: list[Path] = []
         self.repair_completed_count = 0
+        self.history_scan_thread: QThread | None = None
+        self.history_scan_worker: HistoryScanWorker | None = None
+        self.history_entries: list[HistoryEntry] = []
+        self.history_filtered_entries: list[HistoryEntry] = []
+        self.history_visible_entries: list[HistoryEntry] = []
+        self.history_media_status_by_id: dict[int, tuple[str, str]] = {}
+        self.history_page = 1
+        self.history_page_size = 25
+        self.history_store: DownloadHistoryStore | None = None
+        self.history_store_error: str | None = None
+        try:
+            self.history_store = DownloadHistoryStore(history_db_path())
+        except Exception as exc:
+            self.history_store = None
+            self.history_store_error = str(exc)
 
         self._build_ui()
         self._build_menu_bar()
@@ -2342,7 +3052,7 @@ class MainWindow(QMainWindow):
             ffprobe=resolve_ffprobe_bin(),
             retries=self.retries_input.value(),
             overwrite=False,
-            timeout=30,
+            timeout=self.timeout_input.value(),
             user_agent=None,
             referer=None,
             headers=[],
@@ -2590,20 +3300,30 @@ class MainWindow(QMainWindow):
 
         brand_card = QFrame()
         brand_card.setObjectName("sidebarBrand")
-        brand_layout = QVBoxLayout(brand_card)
+        brand_layout = QHBoxLayout(brand_card)
         brand_layout.setContentsMargins(16, 16, 16, 16)
-        brand_layout.setSpacing(6)
+        brand_layout.setSpacing(12)
 
         self.brand_mark_label = QLabel("桃")
-        self.brand_mark_label.setObjectName("brandMark")
+        self.brand_mark_label.setObjectName("brandLogo")
+        self.brand_mark_label.setObjectName("brandLogo")
+        self.brand_mark_label.setText("")
+        self.brand_mark_label.setFixedSize(56, 56)
+        self.brand_mark_label.setPixmap(load_brand_logo_pixmap(56))
+        self.brand_mark_label.setAlignment(Qt.AlignCenter)
+        brand_text_wrap = QWidget()
+        brand_text_layout = QVBoxLayout(brand_text_wrap)
+        brand_text_layout.setContentsMargins(0, 0, 0, 0)
+        brand_text_layout.setSpacing(4)
         self.brand_name_label = QLabel(APP_DISPLAY_NAME)
         self.brand_name_label.setObjectName("brandName")
         self.brand_subtitle_label = QLabel(APP_RELEASE_NAME)
         self.brand_subtitle_label.setObjectName("brandSub")
 
-        brand_layout.addWidget(self.brand_mark_label, 0, Qt.AlignLeft)
-        brand_layout.addWidget(self.brand_name_label)
-        brand_layout.addWidget(self.brand_subtitle_label)
+        brand_text_layout.addWidget(self.brand_name_label)
+        brand_text_layout.addWidget(self.brand_subtitle_label)
+        brand_layout.addWidget(self.brand_mark_label, 0, Qt.AlignVCenter)
+        brand_layout.addWidget(brand_text_wrap, 1)
         sidebar_layout.addWidget(brand_card)
 
         self.sidebar_caption_label = QLabel("")
@@ -2613,11 +3333,13 @@ class MainWindow(QMainWindow):
         self.nav_download_btn = self._create_nav_button("download", "nav_download", "download")
         self.nav_directory_btn = self._create_nav_button("directory", "nav_directory", "directory")
         self.nav_repair_btn = self._create_nav_button("repair", "nav_repair", "repair")
+        self.nav_history_btn = self._create_nav_button("history", "nav_history", "history")
         self.nav_settings_btn = self._create_nav_button("settings", "nav_settings", "settings")
 
         sidebar_layout.addWidget(self.nav_download_btn)
         sidebar_layout.addWidget(self.nav_directory_btn)
         sidebar_layout.addWidget(self.nav_repair_btn)
+        sidebar_layout.addWidget(self.nav_history_btn)
         sidebar_layout.addWidget(self.nav_settings_btn)
         sidebar_layout.addStretch(1)
 
@@ -2783,13 +3505,16 @@ class MainWindow(QMainWindow):
         table_head.addWidget(self.open_folder_btn)
         table_head.addWidget(self.clear_tasks_btn)
 
-        self.table = QTableWidget(0, 6)
+        self.table = HoverAwareTableWidget(0, 6)
         self.table.setHorizontalHeaderLabels(["", "", "", "", "", ""])
         self.table.verticalHeader().setVisible(False)
         self.table.setAlternatingRowColors(True)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.setSelectionMode(QTableWidget.NoSelection)
         self.table.setFocusPolicy(Qt.NoFocus)
+        self.table.setItemDelegate(TaskRowHoverDelegate(self.table))
+        self.table.hoveredRowChanged.connect(self._on_task_table_hovered_row_changed)
+        self.table.cellClicked.connect(self._on_task_table_cell_clicked)
 
         header_view = self.table.horizontalHeader()
         header_view.setSectionResizeMode(0, QHeaderView.ResizeToContents)
@@ -2894,7 +3619,7 @@ class MainWindow(QMainWindow):
         self.repair_progress_label = QLabel("")
         self.repair_progress_label.setObjectName("hintText")
         self.repair_progress_label.setVisible(False)
-        self.repair_progress_bar = QProgressBar()
+        self.repair_progress_bar = AnimatedProgressBar()
         self.repair_progress_bar.setRange(0, 100)
         self.repair_progress_bar.setValue(0)
         self.repair_progress_bar.setFormat("%p%")
@@ -2909,6 +3634,157 @@ class MainWindow(QMainWindow):
         repair_card_layout.addWidget(self.repair_status_label)
         repair_layout.addWidget(repair_card)
         repair_layout.addStretch(1)
+
+        history_page = QWidget()
+        history_layout = QVBoxLayout(history_page)
+        history_layout.setContentsMargins(0, 0, 0, 0)
+        history_layout.setSpacing(16)
+
+        history_filter_card = QFrame()
+        history_filter_card.setObjectName("card")
+        history_filter_layout = QVBoxLayout(history_filter_card)
+        history_filter_layout.setContentsMargins(20, 18, 20, 18)
+        history_filter_layout.setSpacing(12)
+
+        self.history_filters_title_label = QLabel("")
+        self.history_filters_title_label.setObjectName("sectionTitle")
+
+        history_filters_grid = QHBoxLayout()
+        history_filters_grid.setSpacing(10)
+
+        self.history_code_input = QLineEdit()
+        self.history_code_input.setObjectName("pathInput")
+        self.history_code_input.setMinimumHeight(42)
+        self.history_code_input.returnPressed.connect(lambda: self._refresh_history_view(reset_page=True))
+
+        self.history_name_input = QLineEdit()
+        self.history_name_input.setObjectName("pathInput")
+        self.history_name_input.setMinimumHeight(42)
+        self.history_name_input.returnPressed.connect(lambda: self._refresh_history_view(reset_page=True))
+
+        self.history_url_input = QLineEdit()
+        self.history_url_input.setObjectName("pathInput")
+        self.history_url_input.setMinimumHeight(42)
+        self.history_url_input.returnPressed.connect(lambda: self._refresh_history_view(reset_page=True))
+
+        self.history_status_filter = QComboBox()
+        self.history_status_filter.setObjectName("choiceSelect")
+        self.history_status_filter.setMinimumHeight(42)
+        self.history_status_filter.currentIndexChanged.connect(lambda _=0: self._refresh_history_view(reset_page=True))
+
+        history_filters_grid.addWidget(self.history_code_input, 1)
+        history_filters_grid.addWidget(self.history_name_input, 2)
+        history_filters_grid.addWidget(self.history_url_input, 3)
+        history_filters_grid.addWidget(self.history_status_filter, 1)
+
+        history_filter_actions = QHBoxLayout()
+        history_filter_actions.setSpacing(10)
+        self.history_search_btn = QPushButton("")
+        self.history_search_btn.setObjectName("secondaryBtn")
+        self.history_search_btn.setMinimumHeight(40)
+        self.history_search_btn.clicked.connect(lambda: self._refresh_history_view(reset_page=True))
+
+        self.history_reset_btn = QPushButton("")
+        self.history_reset_btn.setObjectName("tableActionBtn")
+        self.history_reset_btn.setMinimumHeight(40)
+        self.history_reset_btn.clicked.connect(self._reset_history_filters)
+
+        history_filter_actions.addWidget(self.history_search_btn)
+        history_filter_actions.addWidget(self.history_reset_btn)
+        history_filter_actions.addStretch(1)
+
+        history_filter_layout.addWidget(self.history_filters_title_label)
+        history_filter_layout.addLayout(history_filters_grid)
+        history_filter_layout.addLayout(history_filter_actions)
+        history_layout.addWidget(history_filter_card)
+
+        history_table_card = QFrame()
+        history_table_card.setObjectName("card")
+        history_table_layout = QVBoxLayout(history_table_card)
+        history_table_layout.setContentsMargins(16, 14, 16, 14)
+        history_table_layout.setSpacing(10)
+
+        history_table_head = QHBoxLayout()
+        history_table_head.setSpacing(10)
+        self.history_actions_title_label = QLabel("")
+        self.history_actions_title_label.setObjectName("sectionTitle")
+        history_table_head.addWidget(self.history_actions_title_label)
+        history_table_head.addStretch(1)
+
+        self.history_scan_btn = QPushButton("")
+        self.history_scan_btn.setObjectName("tableActionBtn")
+        self.history_scan_btn.setMinimumHeight(36)
+        self.history_scan_btn.clicked.connect(self._scan_history_filtered_entries)
+
+        self.history_redownload_selected_btn = QPushButton("")
+        self.history_redownload_selected_btn.setObjectName("secondaryBtn")
+        self.history_redownload_selected_btn.setMinimumHeight(36)
+        self.history_redownload_selected_btn.clicked.connect(self._redownload_selected_history_entries)
+
+        self.history_redownload_page_btn = QPushButton("")
+        self.history_redownload_page_btn.setObjectName("tableActionBtn")
+        self.history_redownload_page_btn.setMinimumHeight(36)
+        self.history_redownload_page_btn.clicked.connect(self._redownload_current_history_page)
+
+        self.history_delete_selected_btn = QPushButton("")
+        self.history_delete_selected_btn.setObjectName("dangerBtn")
+        self.history_delete_selected_btn.setMinimumHeight(36)
+        self.history_delete_selected_btn.clicked.connect(self._delete_selected_history_entries)
+
+        history_table_head.addWidget(self.history_scan_btn)
+        history_table_head.addWidget(self.history_redownload_selected_btn)
+        history_table_head.addWidget(self.history_redownload_page_btn)
+        history_table_head.addWidget(self.history_delete_selected_btn)
+
+        self.history_summary_label = QLabel("")
+        self.history_summary_label.setObjectName("summaryLabel")
+        self.history_summary_label.setWordWrap(True)
+
+        self.history_table = QTableWidget(0, 7)
+        self.history_table.setHorizontalHeaderLabels(["", "", "", "", "", "", ""])
+        self.history_table.verticalHeader().setVisible(False)
+        self.history_table.setAlternatingRowColors(True)
+        self.history_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.history_table.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.history_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.history_table.setFocusPolicy(Qt.StrongFocus)
+        self.history_table.setColumnHidden(0, True)
+
+        history_header = self.history_table.horizontalHeader()
+        history_header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        history_header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        history_header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        history_header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        history_header.setSectionResizeMode(4, QHeaderView.Stretch)
+        history_header.setSectionResizeMode(5, QHeaderView.Interactive)
+        history_header.setSectionResizeMode(6, QHeaderView.ResizeToContents)
+        self.history_table.setColumnWidth(5, 280)
+
+        history_pagination = QHBoxLayout()
+        history_pagination.setSpacing(10)
+        self.history_prev_btn = QPushButton("")
+        self.history_prev_btn.setObjectName("tableActionBtn")
+        self.history_prev_btn.setMinimumHeight(34)
+        self.history_prev_btn.clicked.connect(self._show_prev_history_page)
+
+        self.history_page_label = QLabel("")
+        self.history_page_label.setObjectName("summaryLabel")
+
+        self.history_next_btn = QPushButton("")
+        self.history_next_btn.setObjectName("tableActionBtn")
+        self.history_next_btn.setMinimumHeight(34)
+        self.history_next_btn.clicked.connect(self._show_next_history_page)
+
+        history_pagination.addWidget(self.history_prev_btn)
+        history_pagination.addWidget(self.history_page_label)
+        history_pagination.addWidget(self.history_next_btn)
+        history_pagination.addStretch(1)
+
+        history_table_layout.addLayout(history_table_head)
+        history_table_layout.addWidget(self.history_summary_label)
+        history_table_layout.addWidget(self.history_table, 1)
+        history_table_layout.addLayout(history_pagination)
+        history_layout.addWidget(history_table_card, 1)
 
         settings_page = QWidget()
         settings_layout = QVBoxLayout(settings_page)
@@ -2935,18 +3811,30 @@ class MainWindow(QMainWindow):
 
         self.theme_label = QLabel("")
         self.theme_label.setObjectName("fieldLabel")
-        self.theme_select = QComboBox()
-        self.theme_select.setObjectName("choiceSelect")
-        self.theme_select.setMinimumHeight(42)
-        self.theme_select.addItem("", "light")
-        self.theme_select.addItem("", "dark")
-        self.theme_select.currentIndexChanged.connect(self._on_theme_changed)
+        theme_switch_row = QHBoxLayout()
+        theme_switch_row.setContentsMargins(0, 0, 0, 0)
+        theme_switch_row.setSpacing(10)
+        self.theme_light_btn = QPushButton("")
+        self.theme_light_btn.setObjectName("themeOptionBtn")
+        self.theme_light_btn.setCheckable(True)
+        self.theme_light_btn.setAutoExclusive(True)
+        self.theme_light_btn.setMinimumHeight(42)
+        self.theme_light_btn.clicked.connect(lambda checked=False: self._on_theme_button_clicked("light"))
+        self.theme_dark_btn = QPushButton("")
+        self.theme_dark_btn.setObjectName("themeOptionBtn")
+        self.theme_dark_btn.setCheckable(True)
+        self.theme_dark_btn.setAutoExclusive(True)
+        self.theme_dark_btn.setMinimumHeight(42)
+        self.theme_dark_btn.clicked.connect(lambda checked=False: self._on_theme_button_clicked("dark"))
+        theme_switch_row.addWidget(self.theme_light_btn)
+        theme_switch_row.addWidget(self.theme_dark_btn)
+        theme_switch_row.addStretch(1)
 
         interface_layout.addWidget(self.settings_title_label)
         interface_layout.addWidget(self.lang_label)
         interface_layout.addWidget(self.lang_select)
         interface_layout.addWidget(self.theme_label)
-        interface_layout.addWidget(self.theme_select)
+        interface_layout.addLayout(theme_switch_row)
         settings_layout.addWidget(interface_card)
 
         tuning_card = QFrame()
@@ -2975,6 +3863,16 @@ class MainWindow(QMainWindow):
         self.retries_input.setValue(2)
         self.retries_input.setMinimumHeight(42)
 
+        self.timeout_label = QLabel("")
+        self.timeout_label.setObjectName("fieldLabel")
+        self.timeout_input = QSpinBox()
+        self.timeout_input.setObjectName("spinBox")
+        self.timeout_input.setRange(30, 600)
+        self.timeout_input.setSingleStep(15)
+        self.timeout_input.setValue(120)
+        self.timeout_input.setSuffix(" s")
+        self.timeout_input.setMinimumHeight(42)
+
         self.settings_version_label = QLabel("")
         self.settings_version_label.setObjectName("fieldLabel")
         self.version_btn = QPushButton("")
@@ -2987,6 +3885,8 @@ class MainWindow(QMainWindow):
         tuning_layout.addWidget(self.jobs_input)
         tuning_layout.addWidget(self.retries_label)
         tuning_layout.addWidget(self.retries_input)
+        tuning_layout.addWidget(self.timeout_label)
+        tuning_layout.addWidget(self.timeout_input)
         tuning_layout.addWidget(self.settings_version_label)
         tuning_layout.addWidget(self.version_btn)
         settings_layout.addWidget(tuning_card)
@@ -2996,6 +3896,7 @@ class MainWindow(QMainWindow):
             "download": self.page_stack.addWidget(download_page),
             "directory": self.page_stack.addWidget(directory_page),
             "repair": self.page_stack.addWidget(repair_page),
+            "history": self.page_stack.addWidget(history_page),
             "settings": self.page_stack.addWidget(settings_page),
         }
 
@@ -3065,27 +3966,36 @@ class MainWindow(QMainWindow):
         self.current_lang = code
         self._refresh_i18n_texts()
 
-    def _on_theme_changed(self, index: int) -> None:
-        theme = self.theme_select.itemData(index)
+    def _on_theme_button_clicked(self, theme: str) -> None:
         if not isinstance(theme, str) or theme == self.current_theme:
             return
         self.current_theme = theme
         self._apply_theme(self.current_theme)
+        self._refresh_theme_options()
         self._animate_theme_switch()
 
     def _refresh_theme_options(self) -> None:
-        if not hasattr(self, "theme_select"):
+        if not hasattr(self, "theme_light_btn"):
             return
-        current = self.current_theme
-        self.theme_select.blockSignals(True)
-        light_index = max(0, self.theme_select.findData("light"))
-        dark_index = max(0, self.theme_select.findData("dark"))
-        self.theme_select.setItemText(light_index, self.t("theme_light"))
-        self.theme_select.setItemText(dark_index, self.t("theme_dark"))
-        target = self.theme_select.findData(current)
-        if target >= 0:
-            self.theme_select.setCurrentIndex(target)
-        self.theme_select.blockSignals(False)
+        light_active = self.current_theme == "light"
+        dark_active = self.current_theme == "dark"
+        light_color = QColor("#ff385c" if light_active else "#7f8a98")
+        dark_color = QColor("#ff8da4" if dark_active else "#7f8a98")
+
+        self.theme_light_btn.blockSignals(True)
+        self.theme_dark_btn.blockSignals(True)
+        self.theme_light_btn.setChecked(light_active)
+        self.theme_dark_btn.setChecked(dark_active)
+        self.theme_light_btn.setIcon(create_theme_icon("light", light_color))
+        self.theme_dark_btn.setIcon(create_theme_icon("dark", dark_color))
+        self.theme_light_btn.setIconSize(QSize(18, 18))
+        self.theme_dark_btn.setIconSize(QSize(18, 18))
+        self.theme_light_btn.setText(self.t("theme_light"))
+        self.theme_dark_btn.setText(self.t("theme_dark"))
+        self.theme_light_btn.setToolTip(self.t("theme_light_tip"))
+        self.theme_dark_btn.setToolTip(self.t("theme_dark_tip"))
+        self.theme_light_btn.blockSignals(False)
+        self.theme_dark_btn.blockSignals(False)
 
     def _set_active_page(self, page_key: str) -> None:
         index = self.page_index_map.get(page_key)
@@ -3097,12 +4007,15 @@ class MainWindow(QMainWindow):
             btn.setChecked(key == page_key)
         self._refresh_nav_button_icons()
         self._update_page_header()
+        if page_key == "history":
+            self._refresh_history_view()
 
     def _update_page_header(self) -> None:
         page_meta = {
             "download": ("page_download_title", "page_download_sub"),
             "directory": ("page_directory_title", "page_directory_sub"),
             "repair": ("page_repair_title", "page_repair_sub"),
+            "history": ("page_history_title", "page_history_sub"),
             "settings": ("page_settings_title", "page_settings_sub"),
         }
         title_key, sub_key = page_meta.get(self.active_page, page_meta["download"])
@@ -3158,12 +4071,54 @@ class MainWindow(QMainWindow):
             current = min(self.repair_completed_count, total)
             self.repair_progress_label.setText(self.t("repair_progress", current=current, total=total))
 
+        self.history_filters_title_label.setText(self.t("history_filters_title"))
+        self.history_actions_title_label.setText(self.t("history_actions_title"))
+        self.history_code_input.setPlaceholderText(self.t("history_code"))
+        self.history_name_input.setPlaceholderText(self.t("history_name"))
+        self.history_url_input.setPlaceholderText(self.t("history_url"))
+        self.history_search_btn.setText(self.t("history_search"))
+        self.history_reset_btn.setText(self.t("history_reset"))
+        self.history_scan_btn.setText(self.t("history_scan"))
+        self.history_redownload_selected_btn.setText(self.t("history_redownload_selected"))
+        self.history_redownload_page_btn.setText(self.t("history_redownload_page"))
+        self.history_delete_selected_btn.setText(self.t("history_delete_selected"))
+        self.history_prev_btn.setText(self.t("history_page_prev"))
+        self.history_next_btn.setText(self.t("history_page_next"))
+        current_status = self.history_status_filter.currentData() if hasattr(self, "history_status_filter") else "all"
+        history_status_items = [
+            ("all", self.t("history_status_all")),
+            ("unknown", self.t("history_status_unknown")),
+            ("ok", self.t("history_status_ok")),
+            ("broken", self.t("history_status_broken")),
+            ("missing", self.t("history_status_missing")),
+            ("issue", self.t("history_status_issue")),
+        ]
+        self.history_status_filter.blockSignals(True)
+        self.history_status_filter.clear()
+        for value, label in history_status_items:
+            self.history_status_filter.addItem(label, value)
+        target_status_index = self.history_status_filter.findData(current_status)
+        self.history_status_filter.setCurrentIndex(max(0, target_status_index))
+        self.history_status_filter.blockSignals(False)
+        self.history_table.setHorizontalHeaderLabels(
+            [
+                self.t("history_col_id"),
+                self.t("history_col_code"),
+                self.t("history_col_name"),
+                self.t("history_col_status"),
+                self.t("history_col_path"),
+                self.t("history_col_url"),
+                self.t("history_col_updated"),
+            ]
+        )
+
         self.settings_title_label.setText(self.t("settings_title"))
         self.lang_label.setText(self.t("settings_lang"))
         self.theme_label.setText(self.t("settings_theme"))
         self.settings_download_label.setText(self.t("settings_download"))
         self.jobs_label.setText(self.t("jobs"))
         self.retries_label.setText(self.t("retries"))
+        self.timeout_label.setText(self.t("timeout"))
         self.settings_version_label.setText(self.t("settings_version"))
 
         self.lang_select.blockSignals(True)
@@ -3228,6 +4183,7 @@ class MainWindow(QMainWindow):
 
         self._update_page_header()
         self._update_version_btn_text()
+        self._refresh_history_pagination_label()
 
     def _localize_detail(self, detail: str) -> str:
         if self.current_lang == "zh" or not detail:
@@ -3346,17 +4302,12 @@ class MainWindow(QMainWindow):
                     border: 1px solid #34343a;
                     border-radius: 14px;
                 }
-                QLabel#brandMark {
-                    min-width: 44px;
-                    max-width: 44px;
-                    min-height: 44px;
-                    max-height: 44px;
-                    border-radius: 22px;
-                    background: #ff385c;
-                    color: white;
-                    font-size: 22px;
-                    font-weight: 700;
-                    qproperty-alignment: AlignCenter;
+                QLabel#brandLogo {
+                    min-width: 56px;
+                    max-width: 56px;
+                    min-height: 56px;
+                    max-height: 56px;
+                    background: transparent;
                 }
                 QLabel#brandName {
                     color: #ffffff;
@@ -3461,6 +4412,28 @@ class MainWindow(QMainWindow):
                     color: #ffffff;
                     selection-background-color: #ff5d7d;
                 }
+                QSpinBox#spinBox {
+                    padding-right: 34px;
+                }
+                QSpinBox#spinBox::up-button, QSpinBox#spinBox::down-button {
+                    width: 22px;
+                    border-left: 1px solid #3a3a42;
+                    background: #313137;
+                }
+                QSpinBox#spinBox::up-button {
+                    subcontrol-origin: border;
+                    subcontrol-position: top right;
+                    border-top-right-radius: 8px;
+                }
+                QSpinBox#spinBox::down-button {
+                    subcontrol-origin: border;
+                    subcontrol-position: bottom right;
+                    border-bottom-right-radius: 8px;
+                    border-top: 1px solid #3a3a42;
+                }
+                QSpinBox#spinBox::up-button:hover, QSpinBox#spinBox::down-button:hover {
+                    background: #3a3a42;
+                }
                 QTabWidget#inputTabs::pane {
                     border: 1px solid #34343a;
                     border-radius: 14px;
@@ -3510,6 +4483,24 @@ class MainWindow(QMainWindow):
                 QPushButton#secondaryBtn:hover, QPushButton#tableActionBtn:hover {
                     background: #333338;
                 }
+                QPushButton#themeOptionBtn {
+                    background: #26262a;
+                    color: #f2edf0;
+                    border: 1px solid #3c3c42;
+                    border-radius: 10px;
+                    padding: 10px 14px;
+                    font-size: 14px;
+                    font-weight: 600;
+                    text-align: left;
+                }
+                QPushButton#themeOptionBtn:hover {
+                    background: #2f2f35;
+                }
+                QPushButton#themeOptionBtn:checked {
+                    background: #322127;
+                    color: #ffb8c5;
+                    border-color: #5a3a43;
+                }
                 QPushButton#miniBtn {
                     background: #2a2a2e;
                     color: #f7f2f4;
@@ -3553,6 +4544,12 @@ class MainWindow(QMainWindow):
                     border-radius: 14px;
                     gridline-color: #2a2a2f;
                     alternate-background-color: #232327;
+                }
+                QTableWidget::item:hover {
+                    background: transparent;
+                }
+                QTableWidget::item:selected {
+                    background: rgba(255, 93, 125, 0.18);
                 }
                 QHeaderView::section {
                     background: #2a2a2e;
@@ -3606,17 +4603,12 @@ class MainWindow(QMainWindow):
                     border: 1px solid #ffe1e7;
                     border-radius: 14px;
                 }
-                QLabel#brandMark {
-                    min-width: 44px;
-                    max-width: 44px;
-                    min-height: 44px;
-                    max-height: 44px;
-                    border-radius: 22px;
-                    background: #ff385c;
-                    color: white;
-                    font-size: 22px;
-                    font-weight: 700;
-                    qproperty-alignment: AlignCenter;
+                QLabel#brandLogo {
+                    min-width: 56px;
+                    max-width: 56px;
+                    min-height: 56px;
+                    max-height: 56px;
+                    background: transparent;
                 }
                 QLabel#brandName {
                     color: #222222;
@@ -3722,6 +4714,28 @@ class MainWindow(QMainWindow):
                     selection-background-color: #ff5d7d;
                     selection-color: #ffffff;
                 }
+                QSpinBox#spinBox {
+                    padding-right: 34px;
+                }
+                QSpinBox#spinBox::up-button, QSpinBox#spinBox::down-button {
+                    width: 22px;
+                    border-left: 1px solid #dddddd;
+                    background: #fafafa;
+                }
+                QSpinBox#spinBox::up-button {
+                    subcontrol-origin: border;
+                    subcontrol-position: top right;
+                    border-top-right-radius: 8px;
+                }
+                QSpinBox#spinBox::down-button {
+                    subcontrol-origin: border;
+                    subcontrol-position: bottom right;
+                    border-bottom-right-radius: 8px;
+                    border-top: 1px solid #dddddd;
+                }
+                QSpinBox#spinBox::up-button:hover, QSpinBox#spinBox::down-button:hover {
+                    background: #f0f2f5;
+                }
                 QTabWidget#inputTabs::pane {
                     border: 1px solid #ebebeb;
                     border-radius: 14px;
@@ -3771,6 +4785,24 @@ class MainWindow(QMainWindow):
                 QPushButton#secondaryBtn:hover, QPushButton#tableActionBtn:hover {
                     background: #f7f7f7;
                 }
+                QPushButton#themeOptionBtn {
+                    background: #ffffff;
+                    color: #222222;
+                    border: 1px solid #dddddd;
+                    border-radius: 10px;
+                    padding: 10px 14px;
+                    font-size: 14px;
+                    font-weight: 600;
+                    text-align: left;
+                }
+                QPushButton#themeOptionBtn:hover {
+                    background: #f7f7f7;
+                }
+                QPushButton#themeOptionBtn:checked {
+                    background: #fff1f4;
+                    color: #ff385c;
+                    border-color: #ffd6de;
+                }
                 QPushButton#miniBtn {
                     background: #ffffff;
                     color: #222222;
@@ -3814,6 +4846,12 @@ class MainWindow(QMainWindow):
                     border-radius: 14px;
                     gridline-color: #f0f0f0;
                     alternate-background-color: #fcfcfc;
+                }
+                QTableWidget::item:hover {
+                    background: transparent;
+                }
+                QTableWidget::item:selected {
+                    background: rgba(255, 93, 125, 0.14);
                 }
                 QHeaderView::section {
                     background: #f7f7f7;
@@ -3912,6 +4950,7 @@ class MainWindow(QMainWindow):
             self.repair_progress_bar.setRange(0, 100)
             self.repair_progress_bar.setValue(0)
             self.repair_progress_bar.setFormat("%p%")
+            self.repair_progress_bar.set_busy(False)
             self.repair_progress_label.clear()
 
     def _start_repair_session(self, sources: list[Path], options: DownloadOptions) -> None:
@@ -3925,6 +4964,7 @@ class MainWindow(QMainWindow):
         self._set_repair_running(True)
         self.repair_progress_bar.setRange(0, 0)
         self.repair_progress_bar.setFormat("")
+        self.repair_progress_bar.set_busy(True)
 
         self.repair_thread = QThread(self)
         self.repair_worker = RepairWorker(sources, options)
@@ -3961,6 +5001,7 @@ class MainWindow(QMainWindow):
             self.repair_progress_bar.setRange(0, max(1, total))
             self.repair_progress_bar.setValue(current)
             self.repair_progress_bar.setFormat("%v/%m")
+            self.repair_progress_bar.set_busy(current < total)
             self.repair_status_label.setText(
                 self.t("repair_processing", current=current, total=total, file=file_name)
             )
@@ -3973,6 +5014,7 @@ class MainWindow(QMainWindow):
         )
         self.repair_progress_bar.setRange(0, 0)
         self.repair_progress_bar.setFormat("")
+        self.repair_progress_bar.set_busy(True)
 
         stage_key = f"repair_stage_{stage}"
         stage_text = I18N.get(self.current_lang, {}).get(stage_key)
@@ -4062,6 +5104,7 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _on_repair_thread_finished(self) -> None:
+        self.repair_progress_bar.set_busy(False)
         if self.repair_worker:
             self.repair_worker.deleteLater()
             self.repair_worker = None
@@ -4129,6 +5172,7 @@ class MainWindow(QMainWindow):
         detail_item = QTableWidgetItem(task.url)
         idx_item.setTextAlignment(Qt.AlignCenter)
         status_item.setTextAlignment(Qt.AlignCenter)
+        name_item.setToolTip(str(task.output_path))
 
         self.table.setItem(row, 0, idx_item)
         self.table.setItem(row, 1, name_item)
@@ -4140,15 +5184,16 @@ class MainWindow(QMainWindow):
         bar_layout.setContentsMargins(8, 0, 8, 0)
         bar_layout.setSpacing(0)
 
-        bar = QProgressBar()
+        bar = AnimatedProgressBar()
         bar.setRange(0, 100)
         bar.setValue(0)
         bar.setTextVisible(True)
         bar.setFormat("0%")
-        bar.setFixedHeight(12)
+        bar.setFixedHeight(14)
         bar_layout.addWidget(bar, 1, Qt.AlignVCenter)
         self.table.setCellWidget(row, 3, bar_wrap)
         self.progress_by_index[task.index] = bar
+        self.progress_wrap_by_index[task.index] = bar_wrap
 
         action_wrap = QWidget()
         action_layout = QHBoxLayout(action_wrap)
@@ -4180,6 +5225,7 @@ class MainWindow(QMainWindow):
         action_layout.addWidget(delete_btn)
         action_layout.addStretch(1)
         self.table.setCellWidget(row, 5, action_wrap)
+        self.action_wrap_by_index[task.index] = action_wrap
         self.pause_btn_by_index[task.index] = pause_btn
         self.play_btn_by_index[task.index] = play_btn
         self.delete_btn_by_index[task.index] = delete_btn
@@ -4342,6 +5388,393 @@ class MainWindow(QMainWindow):
         if btn:
             btn.setEnabled(enabled)
 
+    def _set_progress_busy(self, task_index: int, busy: bool) -> None:
+        bar = self.progress_by_index.get(task_index)
+        if isinstance(bar, AnimatedProgressBar):
+            bar.set_busy(busy)
+
+    @Slot(int, int)
+    def _on_task_table_hovered_row_changed(self, previous_row: int, current_row: int) -> None:
+        self._apply_task_row_hover(previous_row, False)
+        self._apply_task_row_hover(current_row, True)
+
+    def _apply_task_row_hover(self, row: int, hovered: bool) -> None:
+        if row < 0:
+            return
+        idx_item = self.table.item(row, 0)
+        if not idx_item:
+            return
+        try:
+            task_index = int(idx_item.text())
+        except Exception:
+            return
+        progress_wrap = self.progress_wrap_by_index.get(task_index)
+        if progress_wrap and progress_wrap.layout():
+            progress_wrap.layout().setContentsMargins(12 if hovered else 8, 0, 4 if hovered else 8, 0)
+        action_wrap = self.action_wrap_by_index.get(task_index)
+        if action_wrap and action_wrap.layout():
+            action_wrap.layout().setContentsMargins(14 if hovered else 10, 6, 6 if hovered else 10, 6)
+
+    @Slot(int, int)
+    def _on_task_table_cell_clicked(self, row: int, column: int) -> None:
+        if column != 1:
+            return
+        idx_item = self.table.item(row, 0)
+        if not idx_item:
+            return
+        try:
+            task_index = int(idx_item.text())
+        except Exception:
+            return
+        output_path = self.task_output_path_by_index.get(task_index)
+        if not output_path:
+            return
+        QApplication.clipboard().setText(str(output_path))
+        QToolTip.showText(QCursor.pos(), self.t("tip_copied_output"), self.table.viewport())
+
+    def _record_history_entry(self, task_index: int) -> None:
+        if not self.history_store:
+            return
+        url = self.task_url_by_index.get(task_index, "").strip()
+        output_path = self.task_output_path_by_index.get(task_index)
+        if not url or not output_path:
+            return
+        name = output_path.name
+        try:
+            self.history_store.upsert_entry(
+                code=extract_video_code(name),
+                name=name,
+                url=url,
+                output_path=str(output_path),
+            )
+        except Exception as exc:
+            self.history_store_error = str(exc)
+            return
+        if self.active_page == "history":
+            self._refresh_history_view()
+
+    def _history_entry_status(self, entry: HistoryEntry) -> tuple[str, str]:
+        cached = self.history_media_status_by_id.get(entry.id)
+        if cached:
+            return cached
+        target = Path(entry.output_path)
+        if not target.exists():
+            return "missing", "输出文件不存在"
+        return "unknown", ""
+
+    def _history_status_text(self, status: str) -> str:
+        return {
+            "unknown": self.t("history_status_unknown"),
+            "ok": self.t("history_status_ok"),
+            "broken": self.t("history_status_broken"),
+            "missing": self.t("history_status_missing"),
+        }.get(status, status)
+
+    def _history_status_color(self, status: str) -> QColor:
+        if status == "ok":
+            return QColor("#1F8F4D") if self.current_theme == "light" else QColor("#86E3A8")
+        if status == "broken":
+            return QColor("#C62828") if self.current_theme == "light" else QColor("#FF9A9A")
+        if status == "missing":
+            return QColor("#AD6E00") if self.current_theme == "light" else QColor("#FFD287")
+        return QColor("#3E63DD") if self.current_theme == "light" else QColor("#A7C5FF")
+
+    def _history_matches_status_filter(self, entry: HistoryEntry, status_filter: str) -> bool:
+        status, _ = self._history_entry_status(entry)
+        if status_filter == "all":
+            return True
+        if status_filter == "issue":
+            return status in {"broken", "missing"}
+        return status == status_filter
+
+    def _refresh_history_pagination_label(self) -> None:
+        if not hasattr(self, "history_page_label"):
+            return
+        total = len(self.history_filtered_entries)
+        total_pages = max(1, (total + self.history_page_size - 1) // self.history_page_size) if total else 1
+        self.history_page_label.setText(self.t("history_page_info", current=self.history_page, total=total_pages))
+        if hasattr(self, "history_prev_btn"):
+            self.history_prev_btn.setEnabled(self.history_page > 1)
+        if hasattr(self, "history_next_btn"):
+            self.history_next_btn.setEnabled(self.history_page < total_pages)
+
+    def _refresh_history_view(self, *, reset_page: bool = False) -> None:
+        if not hasattr(self, "history_table"):
+            return
+        if reset_page:
+            self.history_page = 1
+        if not self.history_store:
+            self.history_entries = []
+            self.history_filtered_entries = []
+            self.history_visible_entries = []
+            self.history_table.setRowCount(0)
+            self.history_summary_label.setText(
+                self.t("history_store_failed", err=self.history_store_error or "unknown error")
+            )
+            self._refresh_history_pagination_label()
+            return
+
+        try:
+            self.history_entries = self.history_store.query_entries(
+                code_filter=self.history_code_input.text().strip(),
+                name_filter=self.history_name_input.text().strip(),
+                url_filter=self.history_url_input.text().strip(),
+            )
+        except Exception as exc:
+            self.history_entries = []
+            self.history_filtered_entries = []
+            self.history_visible_entries = []
+            self.history_summary_label.setText(self.t("history_store_failed", err=str(exc)))
+            self.history_table.setRowCount(0)
+            self._refresh_history_pagination_label()
+            return
+
+        status_filter = str(self.history_status_filter.currentData() or "all")
+        self.history_filtered_entries = [
+            entry for entry in self.history_entries if self._history_matches_status_filter(entry, status_filter)
+        ]
+
+        total = len(self.history_filtered_entries)
+        total_pages = max(1, (total + self.history_page_size - 1) // self.history_page_size) if total else 1
+        self.history_page = max(1, min(self.history_page, total_pages))
+        start = (self.history_page - 1) * self.history_page_size
+        end = start + self.history_page_size
+        self.history_visible_entries = self.history_filtered_entries[start:end]
+
+        self.history_table.setRowCount(0)
+        for entry in self.history_visible_entries:
+            row = self.history_table.rowCount()
+            self.history_table.insertRow(row)
+
+            status, detail = self._history_entry_status(entry)
+            values = [
+                str(entry.id),
+                entry.code,
+                entry.name,
+                self._history_status_text(status),
+                entry.output_path,
+                entry.url,
+                entry.updated_at.replace("T", " "),
+            ]
+            for column, value in enumerate(values):
+                item = QTableWidgetItem(value)
+                if column == 3:
+                    item.setForeground(QBrush(self._history_status_color(status)))
+                    item.setTextAlignment(Qt.AlignCenter)
+                if column == 0:
+                    item.setData(Qt.UserRole, entry.id)
+                if column == 4 and detail:
+                    item.setToolTip(detail)
+                if column == 5:
+                    item.setToolTip(entry.url)
+                self.history_table.setItem(row, column, item)
+
+        if total == 0:
+            self.history_summary_label.setText(self.t("history_summary_empty"))
+        else:
+            self.history_summary_label.setText(
+                self.t("history_summary_page", total=total, current=self.history_page, total_pages=total_pages)
+            )
+        self._refresh_history_pagination_label()
+
+    def _reset_history_filters(self) -> None:
+        self.history_code_input.clear()
+        self.history_name_input.clear()
+        self.history_url_input.clear()
+        self.history_status_filter.blockSignals(True)
+        index = self.history_status_filter.findData("all")
+        if index >= 0:
+            self.history_status_filter.setCurrentIndex(index)
+        self.history_status_filter.blockSignals(False)
+        self._refresh_history_view(reset_page=True)
+
+    def _show_prev_history_page(self) -> None:
+        if self.history_page <= 1:
+            return
+        self.history_page -= 1
+        self._refresh_history_view()
+
+    def _show_next_history_page(self) -> None:
+        total = len(self.history_filtered_entries)
+        total_pages = max(1, (total + self.history_page_size - 1) // self.history_page_size) if total else 1
+        if self.history_page >= total_pages:
+            return
+        self.history_page += 1
+        self._refresh_history_view()
+
+    def _selected_history_entries(self) -> list[HistoryEntry]:
+        if not hasattr(self, "history_table"):
+            return []
+        selected_rows = self.history_table.selectionModel().selectedRows() if self.history_table.selectionModel() else []
+        if not selected_rows:
+            return []
+        visible_by_id = {entry.id: entry for entry in self.history_visible_entries}
+        selected_entries: list[HistoryEntry] = []
+        for model_index in selected_rows:
+            id_item = self.history_table.item(model_index.row(), 0)
+            if not id_item:
+                continue
+            try:
+                entry_id = int(id_item.text())
+            except Exception:
+                continue
+            entry = visible_by_id.get(entry_id)
+            if entry:
+                selected_entries.append(entry)
+        return selected_entries
+
+    def _scan_history_filtered_entries(self) -> None:
+        if self.history_scan_thread and self.history_scan_thread.isRunning():
+            return
+        entries = list(self.history_filtered_entries)
+        if not entries:
+            QMessageBox.information(self, self.t("tip"), self.t("history_summary_empty"))
+            return
+        try:
+            options = self._build_default_options()
+        except Exception as exc:
+            title = self.t("ffmpeg_missing") if isinstance(exc, FileNotFoundError) else self.t("tip")
+            QMessageBox.critical(self, title, str(exc))
+            return
+
+        self.history_scan_btn.setEnabled(False)
+        self.history_summary_label.setText(self.t("history_scan_running", total=len(entries)))
+
+        self.history_scan_worker = HistoryScanWorker(entries, options)
+        self.history_scan_thread = QThread(self)
+        self.history_scan_worker.moveToThread(self.history_scan_thread)
+        self.history_scan_thread.started.connect(self.history_scan_worker.run)
+        self.history_scan_worker.progress.connect(self._on_history_scan_progress)
+        self.history_scan_worker.finished.connect(self._on_history_scan_finished)
+        self.history_scan_worker.finished.connect(self.history_scan_thread.quit)
+        self.history_scan_thread.finished.connect(self.history_scan_worker.deleteLater)
+        self.history_scan_thread.finished.connect(self.history_scan_thread.deleteLater)
+        self.history_scan_thread.finished.connect(self._on_history_scan_thread_finished)
+        self.history_scan_thread.start()
+
+    @Slot(int, int, str)
+    def _on_history_scan_progress(self, current: int, total: int, name: str) -> None:
+        self.history_summary_label.setText(self.t("history_scan_progress", current=current, total=total, name=name))
+
+    @Slot(object)
+    def _on_history_scan_finished(self, results: object) -> None:
+        ok_count = 0
+        broken_count = 0
+        missing_count = 0
+        for entry_id, status, detail in list(results or []):
+            self.history_media_status_by_id[int(entry_id)] = (str(status), str(detail or ""))
+            if status == "ok":
+                ok_count += 1
+            elif status == "broken":
+                broken_count += 1
+            elif status == "missing":
+                missing_count += 1
+        if broken_count or missing_count:
+            self.history_status_filter.blockSignals(True)
+            issue_index = self.history_status_filter.findData("issue")
+            if issue_index >= 0:
+                self.history_status_filter.setCurrentIndex(issue_index)
+            self.history_status_filter.blockSignals(False)
+        self._refresh_history_view(reset_page=True)
+        self.history_summary_label.setText(
+            self.t("history_scan_done", ok=ok_count, broken=broken_count, missing=missing_count)
+        )
+
+    @Slot()
+    def _on_history_scan_thread_finished(self) -> None:
+        self.history_scan_btn.setEnabled(True)
+        self.history_scan_worker = None
+        self.history_scan_thread = None
+
+    def _enqueue_history_entries_for_download(self, entries: list[HistoryEntry]) -> int:
+        if not entries:
+            QMessageBox.information(self, self.t("tip"), self.t("history_redownload_none"))
+            return 0
+
+        try:
+            if self.worker and self.worker_thread and self.worker_thread.isRunning():
+                output_dir = self.worker.output_dir
+                options = self.worker.options
+                jobs = self.worker.jobs
+                running = True
+            else:
+                output_dir = self._resolve_output_dir()
+                options = self._build_default_options()
+                jobs = self.jobs_input.value()
+                running = False
+        except Exception as exc:
+            title = self.t("ffmpeg_missing") if isinstance(exc, FileNotFoundError) else self.t("tip")
+            QMessageBox.critical(self, title, str(exc))
+            return 0
+
+        existing_urls = {u.strip() for u in self.task_url_by_index.values()}
+        used_names = self._current_used_output_names()
+        next_index = self._next_task_index()
+        tasks: list[DownloadTask] = []
+
+        for entry in entries:
+            url = entry.url.strip()
+            if not is_probable_url(url) or url in existing_urls:
+                continue
+            tasks.append(
+                build_task(
+                    index=next_index,
+                    url=url,
+                    output_dir=output_dir,
+                    used_names=used_names,
+                    custom_name=entry.name,
+                )
+            )
+            existing_urls.add(url)
+            next_index += 1
+
+        if not tasks:
+            QMessageBox.information(self, self.t("tip"), self.t("history_redownload_none"))
+            return 0
+
+        if running:
+            added = self._append_tasks_to_active_worker(tasks)
+        else:
+            self._start_worker_session(tasks, options, jobs, output_dir, clear_existing=False)
+            added = len(tasks)
+        self._set_active_page("download")
+        self.summary_label.setText(self.t("history_redownload_added", added=added))
+        return added
+
+    def _redownload_selected_history_entries(self) -> None:
+        entries = self._selected_history_entries()
+        if not entries:
+            QMessageBox.information(self, self.t("tip"), self.t("history_no_selection"))
+            return
+        self._enqueue_history_entries_for_download(entries)
+
+    def _redownload_current_history_page(self) -> None:
+        self._enqueue_history_entries_for_download(list(self.history_visible_entries))
+
+    def _delete_selected_history_entries(self) -> None:
+        entries = self._selected_history_entries()
+        if not entries:
+            QMessageBox.information(self, self.t("tip"), self.t("history_no_selection"))
+            return
+        ret = QMessageBox.question(
+            self,
+            self.t("history_confirm_delete"),
+            self.t("history_confirm_delete_selected"),
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if ret != QMessageBox.Yes or not self.history_store:
+            return
+        ids = [entry.id for entry in entries]
+        try:
+            self.history_store.delete_entries(ids)
+        except Exception as exc:
+            QMessageBox.warning(self, self.t("tip"), self.t("history_store_failed", err=str(exc)))
+            return
+        for entry_id in ids:
+            self.history_media_status_by_id.pop(entry_id, None)
+        self._refresh_history_view(reset_page=True)
+
     def _capture_resume_floor(self, task_index: int) -> None:
         bar = self.progress_by_index.get(task_index)
         if not bar or bar.maximum() == 0:
@@ -4357,6 +5790,8 @@ class MainWindow(QMainWindow):
         self.table.removeRow(row)
         self.row_by_index.pop(task_index, None)
         self.progress_by_index.pop(task_index, None)
+        self.progress_wrap_by_index.pop(task_index, None)
+        self.action_wrap_by_index.pop(task_index, None)
         self.pause_btn_by_index.pop(task_index, None)
         self.play_btn_by_index.pop(task_index, None)
         self.delete_btn_by_index.pop(task_index, None)
@@ -4453,6 +5888,8 @@ class MainWindow(QMainWindow):
         self.table.setRowCount(0)
         self.row_by_index.clear()
         self.progress_by_index.clear()
+        self.progress_wrap_by_index.clear()
+        self.action_wrap_by_index.clear()
         self.pause_btn_by_index.clear()
         self.play_btn_by_index.clear()
         self.delete_btn_by_index.clear()
@@ -4570,6 +6007,7 @@ class MainWindow(QMainWindow):
         detail_item = self.table.item(row, 4)
 
         if status == "stage":
+            self._set_progress_busy(task_index, True)
             localized_detail = self._localize_detail(detail)
             if "下载中" in detail:
                 self._set_status(
@@ -4591,6 +6029,7 @@ class MainWindow(QMainWindow):
             return
 
         if status == "progress" and bar:
+            self._set_progress_busy(task_index, True)
             if progress < 0:
                 if bar.maximum() != 0:
                     bar.setRange(0, 0)
@@ -4612,6 +6051,7 @@ class MainWindow(QMainWindow):
             return
 
         if status == "running":
+            self._set_progress_busy(task_index, True)
             self._set_status(
                 row,
                 self.t("status_waiting"),
@@ -4627,6 +6067,8 @@ class MainWindow(QMainWindow):
 
         if status == "ok":
             self.resume_progress_floor_by_index.pop(task_index, None)
+            self._record_history_entry(task_index)
+            self._set_progress_busy(task_index, False)
             self._set_status(
                 row,
                 self.t("status_done"),
@@ -4648,6 +6090,8 @@ class MainWindow(QMainWindow):
 
         if status == "skipped":
             self.resume_progress_floor_by_index.pop(task_index, None)
+            self._record_history_entry(task_index)
+            self._set_progress_busy(task_index, False)
             self._set_status(
                 row,
                 self.t("status_skipped"),
@@ -4667,6 +6111,7 @@ class MainWindow(QMainWindow):
             return
 
         if status == "paused":
+            self._set_progress_busy(task_index, False)
             self._set_status(
                 row,
                 self.t("status_paused"),
@@ -4685,6 +6130,7 @@ class MainWindow(QMainWindow):
 
         if status == "deleted":
             self.resume_progress_floor_by_index.pop(task_index, None)
+            self._set_progress_busy(task_index, False)
             self._set_status(
                 row,
                 self.t("status_deleted"),
@@ -4704,6 +6150,8 @@ class MainWindow(QMainWindow):
 
         if status == "failed":
             self.resume_progress_floor_by_index.pop(task_index, None)
+            self._record_history_entry(task_index)
+            self._set_progress_busy(task_index, False)
             self._set_status(
                 row,
                 self.t("status_failed"),
@@ -4744,6 +6192,9 @@ class MainWindow(QMainWindow):
         if callable(ignore) and not self._attempt_stop_worker_for_exit():
             ignore()
             return
+        if self.history_scan_thread and self.history_scan_thread.isRunning():
+            self.history_scan_thread.quit()
+            self.history_scan_thread.wait(100)
         if self.local_api_server:
             self.local_api_server.stop()
         super().closeEvent(event)
